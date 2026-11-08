@@ -6,6 +6,7 @@
 Usage (run inside a checkout of the offsets branch, or of offsets/ in main):
     python offsets_index.py has <root> <schema> <chrome version>     # exit 0 if published
     python offsets_index.py add <root> <schema> <chrome version> <pdb key> <offsets.json>
+    python offsets_index.py migrate <root>                            # format 1 -> 2, in place
 
 `add` also migrates the format-1 layout (index {"schema": 1, "versions": {...}} with files
 directly under win64/), which only ever held schema 1.
@@ -49,6 +50,10 @@ def save(root: Path, index: dict) -> None:
 
 def main(argv: list[str]) -> int:
     command, root = argv[1], Path(argv[2])
+    if command == "migrate":
+        if (root / "index.json").exists():
+            save(root, load(root, migrate=True))
+        return 0
     schema, version = str(int(argv[3])), argv[4]
     index = load(root, migrate=command == "add")
     if command == "has":

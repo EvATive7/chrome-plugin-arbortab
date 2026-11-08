@@ -139,6 +139,9 @@ jobs:
           git fetch origin offsets:refs/remotes/origin/offsets 2>$null
           if ($LASTEXITCODE -ne 0) { Write-Host 'nothing published yet'; $global:LASTEXITCODE = 0; exit 0 }
           git worktree add -B offsets D:\offsets-sign origin/offsets
+          # Files are only signed in the current layout (win64/s<schema>/).
+          uv run python -I tools/ci/offsets_index.py migrate D:\offsets-sign
+          if ($LASTEXITCODE -ne 0) { throw 'migrating the offsets layout failed' }
           if ($env:REVOKE) {
             uv run --with cryptography python -I tools/ci/offsets_sign.py revoke D:\offsets-sign $env:REVOKE
             if ($LASTEXITCODE -ne 0) { throw 'revoking failed' }
@@ -153,7 +156,7 @@ jobs:
           git add -A
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
-            $message = if ($env:REVOKE) { "offsets: revoke $env:REVOKE" } else { 'offsets: sign' }
+            $message = if ($env:REVOKE) { "offsets: revoke $env:REVOKE" } else { 'offsets: migrate and sign' }
             git commit -m $message
             git push origin offsets
           }

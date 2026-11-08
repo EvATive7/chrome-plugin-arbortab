@@ -119,6 +119,8 @@ def cmd_revoke(root: Path, target: str) -> None:
 
 
 def cmd_verify(root: Path) -> None:
+    if list((root / "win64").glob("*.json")):
+        raise SystemExit("win64/ still holds files in the old layout; run offsets_index.py migrate first")
     bad = [path for path in signed_files(root) if not is_valid(path)]
     for path in bad:
         print(f"unsigned or badly signed: {path.relative_to(root)}")
