@@ -158,6 +158,9 @@ nodes: Map<tabId, { parentId: number|null, collapsed: boolean }>
 - **导出转发**：实现系统 `version.dll` 的全部 17 个导出（列表见 `research/poc/poc.def`），转发到 `%SystemRoot%\System32\version.dll`。
   - **必须在 `DllMain(DLL_PROCESS_ATTACH)` 中立即加载系统 version.dll**。子进程进入沙箱后再加载会失败，导致调用空指针崩溃（已踩坑）。
   - 转发实现可以用 PoC 中的“通用 8 参数转发”写法，或参考 chrome_plus 的 `hijack.cc` 做法（也是 GPL-3.0，可复用）。
+- **必须在浏览器主进程中关闭子进程的 CIG**（2026-11-08 实测，PoC 已验证）：Chrome 给渲染进程等子进程设置 `MITIGATION_FORCE_MS_SIGNED_BINS`（即 `PROCESS_CREATION_MITIGATION_POLICY_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON`），只放行 MS 签名 DLL + `chrome.dll`/`chrome_elf.dll`。此时 chrome.exe 同目录的未签名 `version.dll` 会让子进程创建直接失败（`STATUS_INVALID_IMAGE_HASH`，`Aw, Snap!`），**Chrome 完全不可用**。因此原生模块在浏览器进程中挂钩 `kernelbase!UpdateProcThreadAttribute`，只在 `Attribute == PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY` 时把该位从策略里清掉（其他属性一律不改，否则 `CreateProcessAsUserW` 返回 `ERROR_INVALID_PARAMETER`）。
+  - 该挂钩是**功能前提**，不是可选优化：没有它浏览器一个页面都开不了。
+  - 副作用范围仅限 Chrome 的子进程（自己的进程不受影响），但这会降低渲染进程的代码完整性防护，README 必须明确写出这一点。
 - **只在浏览器主进程工作**：命令行不含 `--type=` 才继续；其他进程只做导出转发。
 - 等待 `chrome.dll`：用 `LdrRegisterDllNotification`，在 chrome.dll 映射完成的通知里读取模块基址。PoC 中在该回调内直接安装函数拦截可行；网络、文件下载等重操作一律放到后台线程。
 
@@ -425,7 +428,8 @@ nodes: Map<tabId, { parentId: number|null, collapsed: boolean }>
 
 1. **Chrome 自动更新后 `version.dll` 是否保留**：未验证。用户的 Chrome 即将从 156 更新到 157，正好可以观察。计划任务兜底。
 2. **杀毒软件**：`version.dll` 代理加载方式可能被误报，README 说明添加排除项。
-3. **拖拽期间隐藏项对落点计算的影响**（F1×F4）：需实测。
+3. **CIG 关闭的安全影响**：为了让未签名的 `version.dll` 不阻塞子进程创建，原生模块会关闭 Chrome 子进程的代码完整性防护（§5.1）。这降低了浏览器对第三方 DLL 注入的防御，属于必须向用户披露的取舍；README 与商店描述都要写明。
+4. **拖拽期间隐藏项对落点计算的影响**（F1×F4）：需实测。
 4. **本地网络访问策略**：目前扩展声明 `host_permissions` 后不提示，将来 Chrome 策略可能变化。备选方案：Native Messaging（扩展 ↔ 独立宿主进程 ↔ 命名管道 ↔ 原生模块）。协议层保持不变，便于切换。
 5. **Chrome 重构垂直标签实现**：函数改名或删除会导致 CI 失败，需要人工按新源码调整 spec 和功能代码。源码可以用浅克隆 + sparse checkout 拉取指定 tag（见 §13.1）。
 6. **多配置文件、多窗口、隐身窗口**：隐身窗口里扩展默认不运行，原生模块对没有状态的标签按原样显示，所以不受影响。
@@ -483,6 +487,10 @@ nodes: Map<tabId, { parentId: number|null, collapsed: boolean }>
 1. 系统 `version.dll` 必须在 `DllMain` 中加载。延迟加载会导致沙箱子进程调用空指针崩溃。
 2. `child_layouts` 是 `absl::InlinedVector`，按 `std::vector` 读会崩溃。
 3. 在 bash heredoc 里写 C 字符串时，`L"\\version.dll"` 被错误转义成了 `L"\version.dll"`，生成文件后要检查。
+4. **未签名的 `version.dll` 会让所有子进程创建失败**（2026-11-08 实测）：Chrome 对渲染/GPU/ServiceWithJit 等子进程设置 `MITIGATION_FORCE_MS_SIGNED_BINS`，`CreateProcessAsUserW` 返回 `ERROR_INVALID_PARAMETER`，页面变 `Aw, Snap! (STATUS_INVALID_IMAGE_HASH)`。必须挂钩 `kernelbase!UpdateProcThreadAttribute` 清掉 `PROCESS_CREATION_MITIGATION_POLICY_BLOCK_NON_MICROSOFT_BINARIES_ALWAYS_ON`（详见 §5.1）。
+   - 只清这一位；不要顺带清 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`（131074）等其它属性，否则同样返回 `ERROR_INVALID_PARAMETER`。
+   - `POSITION` 与 `PLAN` 早期的 PoC 结论（“只影响渲染进程的 DLL 加载”）不符：不处理时**一个页面也打不开**。
+5. `DraggedTabsContainer::OnTabDragEnded` 与 `DraggedTabsContainer::OnTabDragExited` 在 156 中共用同一地址（ICF），不能作为挂钩点；`tabs::TabModel::GetContents` 也与 `v8::internal::LargeObjectSpace::Size` 折叠，但它只被调用、不被挂钩，属于正常现象。resolver 现在只对 `hook: true` 的函数做同址检查。
 
 ### 13.5 Chrome 156.0.8078.80 实测数据（PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`）
 

@@ -3,7 +3,7 @@
   "chromeVersion": "156.0.8078.80",
   "pdbName": "chrome.dll.pdb",
   "pdbKey": "B2C7C3B72F30D3ED4C4C44205044422E1",
-  "generatedAt": "2026-11-08T05:16:21Z",
+  "generatedAt": "2026-11-08T06:18:59Z",
   "functions": {
     "UnpinnedTabContainerViewLayout::CalculateProposedLayout": {
       "rva": "0x0993c680",
@@ -60,6 +60,26 @@
     "gfx::Canvas::DrawStringRect": {
       "rva": "0x0acfcda0",
       "prologue": "41 57 41 56 56 57 53 48 83 ec 50 44 89 ce 4c 89"
+    }
+  },
+  "hooks": {
+    "UnpinnedTabContainerViewLayout::CalculateProposedLayout": {
+      "rva": "0x0993c680"
+    },
+    "TabView::OnMousePressed": {
+      "rva": "0x09936f40"
+    },
+    "TabView::OnPaint": {
+      "rva": "0x09937760"
+    },
+    "TabView::PaintChildren": {
+      "rva": "0x09937680"
+    },
+    "DraggedTabsContainer::HandleTabDragInContainer": {
+      "rva": "0x0990d5a0"
+    },
+    "TabDragHandlerImpl::EndDrag": {
+      "rva": "0x099238b0"
     }
   },
   "vtables": {

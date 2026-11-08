@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 REQUEST = """<?xml version="1.0" encoding="UTF-8"?>
 <request protocol="3.0" updater="Omaha" ismachine="1" installsource="ondemandcheckforupdate">
   <os platform="win" version="10.0" arch="x64"/>
-  <app appid="{8A69D345-D564-463C-AFF1-A69D9E530F96}" version="" ap="{channel}" lang="en"><updatecheck/></app>
+  <app appid="{{8A69D345-D564-463C-AFF1-A69D9E530F96}}" version="" ap="{channel}" lang="en"><updatecheck/></app>
 </request>"""
 
 

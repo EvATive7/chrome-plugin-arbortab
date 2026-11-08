@@ -12,22 +12,30 @@ functions:
   DraggedTabsContainer::HandleTabDragInContainer:
     private: "DraggedTabsContainer::HandleTabDragInContainer"
   DraggedTabsContainer::OnTabDragEnded:
+    hook: false
     symbol: "?OnTabDragEnded@DraggedTabsContainer@@UEAAXXZ"
   TabDragHandlerImpl::EndDrag:
     symbol: "?EndDrag@TabDragHandlerImpl@@UEAAXW4EndDragReason@@@Z"
   TabView::GetTabInterface:
+    hook: false
     private: "TabView::GetTabInterface"
   sessions::SessionTabHelper::IdForTab:
+    hook: false
     symbol: "?IdForTab@SessionTabHelper@sessions@@SA?AVSessionID@@PEBVWebContents@content@@@Z"
   tabs::TabModel::GetContents:
+    hook: false
     symbol: "?GetContents@TabModel@tabs@@UEBAPEAVWebContents@content@@XZ"
   views::View::InvalidateLayout:
+    hook: false
     symbol: "?InvalidateLayout@View@views@@QEAAX_N@Z"
   views::View::SchedulePaint:
+    hook: false
     symbol: "?SchedulePaint@View@views@@QEAAXXZ"
   gfx::Canvas::FillRect:
+    hook: false
     symbol: "?FillRect@Canvas@gfx@@QEAAXAEBVRect@2@I@Z"
   gfx::Canvas::DrawStringRect:
+    hook: false
     symbol: "?DrawStringRect@Canvas@gfx@@QEAAXV?$basic_string_view@_SU?$char_traits@_S@__Cr@std@@@__Cr@std@@AEBVFontList@2@IAEBVRect@2@@Z"
 vtables:
   TabView: "TabView::`vftable'"

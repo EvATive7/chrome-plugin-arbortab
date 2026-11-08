@@ -79,6 +79,7 @@ class DbgHelp:
         self.module = self.dbg.SymLoadModuleExW(self.process, None, str(pdb), None, BASE, 0x20000000, None, 0)
         if not self.module:
             raise OSError(C.get_last_error(), f"SymLoadModuleExW failed: {pdb}")
+        self._public_map: dict[int, list[str]] | None = None
 
     def set_undecorated(self, enabled: bool) -> None:
         self.dbg.SymSetOptions(SYMOPT_FAIL_CRITICAL_ERRORS | (SYMOPT_UNDNAME if enabled else 0))
@@ -102,6 +103,26 @@ class DbgHelp:
         self.dbg.SymEnumSymbolsW(self.process, self.module, mask, callback, None)
         unique = {(x["name"], x["rva"], x["tag"]): x for x in result}
         return list(unique.values())
+
+    def symbols_at(self, rva: int) -> list[str]:
+        """All public symbol names that start at exactly this address."""
+        return self.public_symbol_map().get(rva, [])
+
+    def public_symbol_map(self) -> dict[int, list[str]]:
+        """Map RVA -> public symbol names, enumerated once and cached."""
+        if self._public_map is None:
+            self.set_undecorated(True)
+            mapping: dict[int, set[str]] = {}
+
+            def collect(pointer, _size, _context):
+                value = pointer.contents
+                mapping.setdefault(int(value.Address - BASE), set()).add(symbol_name(pointer))
+                return True
+
+            callback = CALLBACK(collect)
+            self.dbg.SymEnumSymbolsW(self.process, self.module, "*", callback, None)
+            self._public_map = {key: sorted(names) for key, names in mapping.items()}
+        return self._public_map
 
     def unique_symbol(self, query: str, *, private: bool = False) -> dict[str, Any]:
         matches = self.symbols(query if not private else f"*{query}*", undecorated=private)
@@ -216,16 +237,41 @@ def main() -> int:
 
     functions: dict[str, dict[str, Any]] = {}
     resolved: dict[str, int] = {}
+    hooks: dict[str, bool] = {}
+    aliases: dict[int, list[str]] = {}
     for output_name, request in spec["functions"].items():
         is_private = "private" in request
         query = request.get("private") or request["symbol"]
         found = symbols.unique_symbol(query, private=is_private)
         rva = found["rva"]
         resolved[output_name] = rva
+        hooks[output_name] = bool(request.get("hook", True))
         functions[output_name] = {
             "rva": f"0x{rva:08x}",
             "prologue": read_rva(pe, rva, 16).hex(" "),
         }
+        aliases.setdefault(rva, []).append(output_name)
+
+    # Hooking a function that shares its address with other code would intercept that
+    # code too, so every *hooked* function must be a unique entry point. Functions we
+    # only call (vtable lookups, throw-away helpers) may legally fold onto other code.
+    collisions: dict[str, str] = {}
+    hook_targets: dict[str, dict[str, str]] = {}
+    for output_name, rva in resolved.items():
+        if not hooks.get(output_name, True):
+            continue
+        others = symbols.symbols_at(rva) if len(aliases[rva]) == 1 else []
+        if len(aliases[rva]) > 1:
+            collisions[output_name] = "requested more than once"
+            continue
+        others = [name for name in others if name != output_name]
+        if others:
+            collisions[output_name] = ", ".join(others[:4])
+            continue
+        hook_targets[output_name] = {"rva": functions[output_name]["rva"]}
+    if collisions:
+        details = "; ".join(f"{name} <- {owner}" for name, owner in collisions.items())
+        raise ValueError(f"hooked functions share their address with other code: {details}")
 
     type_cache: dict[str, tuple[int, dict[str, int]]] = {}
     for type_name, expected_size in spec["types"].items():
@@ -272,6 +318,7 @@ def main() -> int:
         "pdbKey": key,
         "generatedAt": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "functions": functions,
+        "hooks": hook_targets,
         "vtables": vtables,
         "vtableSlots": slots,
         "fields": fields,
