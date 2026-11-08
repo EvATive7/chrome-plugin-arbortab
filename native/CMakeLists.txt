@@ -1,0 +1,51 @@
+cmake_minimum_required(VERSION 3.21)
+project(arbortab_native LANGUAGES C CXX)
+
+if(NOT MSVC)
+  message(FATAL_ERROR "ArborTab's native module targets Windows/MSVC only")
+endif()
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+# MinHook (BSD-2-Clause), vendored under third_party/minhook, built as a static library.
+add_library(minhook STATIC
+  third_party/minhook/src/buffer.c
+  third_party/minhook/src/hook.c
+  third_party/minhook/src/trampoline.c
+  third_party/minhook/src/hde/hde32.c
+  third_party/minhook/src/hde/hde64.c
+)
+target_include_directories(minhook PUBLIC third_party/minhook/include)
+target_compile_definitions(minhook PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+  target_compile_options(minhook PRIVATE /W3 /O2)
+endif()
+
+set(ARBORTAB_SOURCES
+  src/main.cpp
+  src/core/cig.cpp
+  src/core/hooks.cpp
+  src/core/log.cpp
+  src/core/offsets.cpp
+  src/core/paths.cpp
+  src/proxy/exports.cpp
+)
+
+add_library(version SHARED ${ARBORTAB_SOURCES} version.def)
+target_include_directories(version PRIVATE src third_party third_party/json)
+# version.dll itself is never linked: every forwarded call goes through GetProcAddress.
+target_link_libraries(version PRIVATE minhook winhttp shlwapi shell32)
+target_compile_definitions(version PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+  target_compile_options(version PRIVATE /W4 /permissive- /Zc:__cplusplus /utf-8 /EHsc)
+endif()
+
+# No import library or debug naming tricks: the artifact must be exactly version.dll.
+set_target_properties(version PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "version"
+  SUFFIX ".dll"
+  LINK_FLAGS "/INCREMENTAL:NO"
+)

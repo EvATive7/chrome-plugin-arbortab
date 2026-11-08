@@ -34,13 +34,18 @@ jobs:
         id: existing
         shell: pwsh
         run: |
-          git fetch origin offsets:refs/remotes/origin/offsets 2>$null
           $exists = $false
+          git fetch origin offsets:refs/remotes/origin/offsets 2>$null
           if ($LASTEXITCODE -eq 0) {
             $index = git show origin/offsets:index.json 2>$null | ConvertFrom-Json
             if ($index.versions.PSObject.Properties.Name -contains '${{ steps.chrome.outputs.version }}') { $exists = $true }
+          } else {
+            Write-Host 'offsets branch does not exist yet; treating this version as unresolved'
           }
           "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          # GitHub's pwsh wrapper fails a step when $LASTEXITCODE is non-zero, and the probe
+          # above is expected to fail until the first offsets are published.
+          $global:LASTEXITCODE = 0
 
       - name: Download and extract Chrome
         if: steps.existing.outputs.exists != 'true'
@@ -83,11 +88,12 @@ jobs:
           $key = '${{ steps.pdb.outputs.key }}'
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if (git show-ref --verify --quiet refs/remotes/origin/offsets) {
+          git fetch origin offsets:refs/remotes/origin/offsets 2>$null
+          if ($LASTEXITCODE -eq 0) {
             git switch --force-create offsets origin/offsets
           } else {
             git switch --orphan offsets
-            git rm -rf .
+            git rm -rf . --quiet
           }
           New-Item -ItemType Directory -Force win64 | Out-Null
           Copy-Item "D:\arbortab\$key.json" "win64\$key.json"
@@ -97,6 +103,7 @@ jobs:
           git add index.json "win64/$key.json"
           git commit -m "offsets: Chrome $version"
           git push origin offsets
+          $global:LASTEXITCODE = 0
 
       - name: Create issue on failure
         if: failure()
