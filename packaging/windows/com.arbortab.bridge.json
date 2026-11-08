@@ -1,0 +1,9 @@
+{
+  "name": "com.arbortab.bridge",
+  "description": "ArborTab: connects the extension to the native module of the browser that runs it",
+  "path": "arbortab-bridge.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://egjpjafmlomkpnncliaigklbdbflface/"
+  ]
+}

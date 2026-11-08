@@ -1,4 +1,6 @@
-# Installs the ArborTab native module (version.dll) next to chrome.exe.
+# Installs the ArborTab native module: version.dll next to chrome.exe, and the Native Messaging
+# bridge (arbortab-bridge.exe) under %LOCALAPPDATA%\ArborTab\bridge, registered for the current
+# user. The bridge is how the extension reaches the module of its own browser.
 #
 # One line (what the settings page shows): downloads the latest native package and installs it
 #   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/EvATive7/chrome-plugin-arbortab/releases/latest/download/install.ps1 | iex"
@@ -12,7 +14,8 @@
 # own console.
 param(
   [string]$ChromeDir,
-  [switch]$Yes  # non-interactive: fail instead of waiting for Chrome to be closed
+  [switch]$Yes,  # non-interactive: fail instead of waiting for Chrome to be closed
+  [switch]$SkipBridge  # set by the elevated re-run: the bridge belongs to the original user
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +47,7 @@ if (-not $ScriptPath -or -not (Test-Path (Join-Path (Split-Path -Parent $ScriptP
   $arguments = @{}
   if ($ChromeDir) { $arguments.ChromeDir = $ChromeDir }
   if ($Yes) { $arguments.Yes = $true }
+  if ($SkipBridge) { $arguments.SkipBridge = $true }
   & (Join-Path $work 'install.ps1') @arguments
   return
 }
@@ -52,6 +56,8 @@ $here = Split-Path -Parent $ScriptPath
 $dll = Join-Path $here 'version.dll'
 $dataDir = Join-Path $env:LOCALAPPDATA 'ArborTab'
 $record = Join-Path $dataDir 'install.json'
+$bridgeDir = Join-Path $dataDir 'bridge'
+$hostKey = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.arbortab.bridge'
 
 function Test-Writable([string]$dir) {
   $probe = Join-Path $dir ".arbortab-write-test-$PID"
@@ -106,11 +112,28 @@ $targets | ForEach-Object { Write-Host "  $_" }
 # Chrome must be closed before anything else, while this console can still ask the user.
 foreach ($dir in $targets) { Wait-ChromeClosed $dir }
 
+# The bridge is per user (HKCU + LOCALAPPDATA), so it is installed before any elevation, as the
+# user who runs Chrome.
+if (-not $SkipBridge) {
+  $bridge = Join-Path $here 'arbortab-bridge.exe'
+  if ((Get-ProductName $bridge) -ne 'ArborTab') { throw "$bridge is not an ArborTab build" }
+  New-Item -ItemType Directory -Force -Path $bridgeDir | Out-Null
+  try {
+    Copy-Item -LiteralPath $bridge, (Join-Path $here 'com.arbortab.bridge.json') -Destination $bridgeDir -Force
+  } catch {
+    throw "Cannot replace $bridgeDir\arbortab-bridge.exe: quit every Chrome window (and other Chrome installs) and run the installer again."
+  }
+  Get-ChildItem -LiteralPath $bridgeDir -File | Unblock-File
+  New-Item -Path $hostKey -Force | Out-Null
+  Set-Item -Path $hostKey -Value (Join-Path $bridgeDir 'com.arbortab.bridge.json')
+  Write-Host "  installed $bridgeDir\arbortab-bridge.exe" -ForegroundColor Green
+}
+
 # Folders that are not writable (Program Files) need elevation: re-run this file elevated.
 $needsAdmin = $targets | Where-Object { -not (Test-Writable $_) }
 if ($needsAdmin -and -not (Test-Admin)) {
   Write-Host 'Chrome is installed for all users: Windows will ask for administrator rights.'
-  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"", '-Yes')
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"", '-Yes', '-SkipBridge')
   if ($ChromeDir) { $arguments += @('-ChromeDir', "`"$ChromeDir`"") }
   $process = Start-Process powershell -Verb RunAs -ArgumentList $arguments -Wait -PassThru
   if ($process.ExitCode -ne 0) { throw 'The elevated installer failed.' }

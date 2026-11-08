@@ -33,15 +33,28 @@ set(ARBORTAB_VERSION_MAJOR ${CMAKE_MATCH_1})
 set(ARBORTAB_VERSION_MINOR ${CMAKE_MATCH_2})
 set(ARBORTAB_VERSION_PATCH ${CMAKE_MATCH_3})
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+# One version-resource template for both binaries; the installer identifies ArborTab files by
+# their ProductName.
+set(RC_FILETYPE VFT_DLL)
+set(RC_DESCRIPTION "ArborTab native module (version.dll proxy)")
+set(RC_NAME version)
+set(RC_FILENAME version.dll)
 configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/version.rc" @ONLY)
+set(RC_FILETYPE VFT_APP)
+set(RC_DESCRIPTION "ArborTab Native Messaging bridge")
+set(RC_NAME arbortab-bridge)
+set(RC_FILENAME arbortab-bridge.exe)
+configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/bridge.rc" @ONLY)
 
 set(ARBORTAB_SOURCES
   src/main.cpp
   src/core/chrome_api.cpp
   src/core/cig.cpp
+  src/core/crash_guard.cpp
   src/core/hooks.cpp
   src/core/log.cpp
   src/core/offsets.cpp
+  src/core/offsets_trust.cpp
   src/core/paths.cpp
   src/core/state.cpp
   src/core/ui_thread.cpp
@@ -51,6 +64,9 @@ set(ARBORTAB_SOURCES
   src/features/layout.cpp
   src/features/mouse.cpp
   src/features/paint.cpp
+  src/link/pipe_io.cpp
+  src/link/pipe_server.cpp
+  src/link/server.cpp
   src/link/ws_server.cpp
   src/proxy/exports.cpp
 )
@@ -73,6 +89,14 @@ if(MSVC)
   target_compile_options(version PRIVATE $<$<CONFIG:Release>:/Zi>)
   target_link_options(version PRIVATE /DEBUG /OPT:REF /OPT:ICF)
 endif()
+
+# Native Messaging host: connects the extension to the pipe of the browser that started it.
+add_executable(arbortab-bridge bridge/bridge.cpp src/link/pipe_io.cpp
+  "${CMAKE_CURRENT_BINARY_DIR}/bridge.rc")
+target_include_directories(arbortab-bridge PRIVATE src)
+target_compile_definitions(arbortab-bridge PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+  ARBORTAB_VERSION="${ARBORTAB_VERSION}")
+target_compile_options(arbortab-bridge PRIVATE /W4 /permissive- /utf-8 /EHsc)
 
 # No import library or debug naming tricks: the artifact must be exactly version.dll.
 set_target_properties(version PROPERTIES

@@ -1,5 +1,5 @@
-"""One-shot dev loop for the sandbox Chrome: build -> stop -> install DLL -> start -> load the
-extension -> verify that the new build is the one running.
+"""One-shot dev loop for the sandbox Chrome: build -> stop -> install DLL and bridge -> start ->
+load (and reload) the extension -> verify that the new build is the one running.
 
     uv run --with websocket-client python tools/dev/dev.py            # rebuild DLL + restart
     uv run --with websocket-client python tools/dev/dev.py --no-build # restart only
@@ -25,6 +25,9 @@ import sandbox  # noqa: E402  (paths, kill(), install_dll(), wait_cdp())
 
 REPO = Path(__file__).resolve().parents[2]
 DLL = REPO / "artifacts" / "native" / "version.dll"
+BRIDGE = REPO / "artifacts" / "native" / "arbortab-bridge.exe"
+HOST_MANIFEST = REPO / "packaging" / "windows" / "com.arbortab.bridge.json"
+HOST_KEY = r"Software\Google\Chrome\NativeMessagingHosts\com.arbortab.bridge"
 EXTENSION = REPO / "extension"
 EXTENSION_ID = "egjpjafmlomkpnncliaigklbdbflface"
 LOG = Path(os.environ["LOCALAPPDATA"]) / "ArborTab" / "logs" / "native.log"
@@ -84,6 +87,47 @@ def load_extension() -> None:
         raise SystemExit(f"loading the extension failed: {reply['error']}")
 
 
+def install_bridge() -> Path:
+    """Copies the bridge into the sandbox folder (a running copy never locks artifacts/) and
+    registers it as the Native Messaging host. The registration is per user and read by every
+    Chrome, but only the extension IDs in allowed_origins can start it."""
+    import shutil  # noqa: PLC0415
+    import winreg  # noqa: PLC0415
+
+    target = sandbox.SANDBOX / "bridge"
+    target.mkdir(exist_ok=True)
+    shutil.copy2(BRIDGE, target / BRIDGE.name)
+    manifest = target / HOST_MANIFEST.name
+    shutil.copy2(HOST_MANIFEST, manifest)
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, HOST_KEY) as key:
+        winreg.SetValueEx(key, "", 0, winreg.REG_SZ, str(manifest))
+    return manifest
+
+
+def reload_extension() -> None:
+    """Chrome keeps running a cached service worker while the version stays the same, even
+    after loadUnpacked (AGENTS.md, pitfall 17): reload it so the current code runs."""
+    import websocket  # noqa: PLC0415
+
+    for _ in range(50):
+        targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{sandbox.PORT}/json"))
+        worker = next((t for t in targets if t["type"] == "service_worker" and EXTENSION_ID in t["url"]), None)
+        if worker:
+            break
+        time.sleep(0.2)
+    else:
+        raise SystemExit("the extension's service worker did not start")
+    ws = websocket.create_connection(worker["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
+    try:
+        ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
+                            "params": {"expression": "chrome.runtime.reload()"}}))
+        ws.recv()
+    except Exception:  # noqa: BLE001  the worker goes away while reloading
+        pass
+    finally:
+        ws.close()
+
+
 def wait_for_log(start: int, pattern: str, timeout: float) -> str | None:
     regex = re.compile(pattern)
     deadline = time.time() + timeout
@@ -105,32 +149,35 @@ def main() -> int:
 
     if not args.no_build:
         build()
-    if not DLL.exists():
-        raise SystemExit(f"missing {DLL}; run without --no-build first")
+    for artifact in (DLL, BRIDGE):
+        if not artifact.exists():
+            raise SystemExit(f"missing {artifact}; run without --no-build first")
     stamp = build_stamp(DLL)
 
     step("stopping the sandbox Chrome")
     sandbox.kill()
     step(f"installing version.dll (build {stamp})")
     sandbox.install_dll(DLL)
+    step(f"registering the bridge: {install_bridge()}")
 
     log_start = LOG.stat().st_size if LOG.exists() else 0
     step("starting the sandbox Chrome")
     launch()
     step("loading the extension")
     load_extension()
+    reload_extension()
 
     step("verifying")
     attached = wait_for_log(log_start, r"attached to browser process", 15)
     loaded = wait_for_log(log_start, r"\(build " + re.escape(stamp) + r"\)", 15)
     # Features only appear once offsets for this Chrome build are loaded.
-    offsets = wait_for_log(log_start, r"features: |no usable offsets|downloads are disabled|offsets are unavailable", 20)
-    connected = wait_for_log(log_start, r"client \d+ accepted", 20)
+    offsets = wait_for_log(log_start, r"features: |safe mode: |no usable offsets|downloads are disabled|offsets are unavailable", 20)
+    connected = wait_for_log(log_start, r"client \d+ accepted over pipe", 20)
     ok = True
     for label, line in (("native module attached", attached),
                         (f"running build {stamp}", loaded),
                         ("offsets / features", offsets),
-                        ("extension connected", connected)):
+                        ("extension connected through the bridge", connected)):
         mark = "OK  " if line else "FAIL"
         ok &= bool(line)
         detail = line.split("] ", 1)[-1] if line else "(not found in native.log)"

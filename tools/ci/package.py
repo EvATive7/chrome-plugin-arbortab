@@ -2,9 +2,11 @@
 
     uv run python tools/ci/package.py --dll artifacts/native/version.dll --out dist
 
-- arbortab-extension-<version>.zip      extension/ without tests; manifest without "key", since
-                                        the Chrome Web Store assigns the ID itself
-- arbortab-native-<version>-win64.zip   version.dll + install/uninstall scripts + LICENSE
+- arbortab-extension-<version>.zip      extension/ without tests. The manifest keeps its "key", so
+                                        the unpacked release has the fixed ID that the bridge's
+                                        allowed_origins lists (a store build gets its own ID)
+- arbortab-native-<version>-win64.zip   version.dll + arbortab-bridge.exe + packaging/windows
+                                        (install/uninstall scripts, bridge host manifest) + LICENSE
 - install.ps1, uninstall.ps1            also as loose assets: the one-line install command fetches
                                         releases/latest/download/install.ps1, which then downloads
                                         the native zip of the same release
@@ -14,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import shutil
 import zipfile
 from pathlib import Path
@@ -32,19 +33,15 @@ def zip_extension(version: str, out: Path) -> Path:
             relative = path.relative_to(EXTENSION)
             if path.is_dir() or relative.parts[0] in EXCLUDED_DIRS or path.suffix in EXCLUDED_SUFFIXES:
                 continue
-            if relative.as_posix() == "manifest.json":
-                manifest = json.loads(path.read_text(encoding="utf-8"))
-                manifest.pop("key", None)
-                archive.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False) + "\n")
-                continue
             archive.write(path, relative.as_posix())
     return target
 
 
-def zip_native(version: str, dll: Path, out: Path) -> Path:
+def zip_native(version: str, dll: Path, bridge: Path, out: Path) -> Path:
     target = out / f"arbortab-native-{version}-win64.zip"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.write(dll, "version.dll")
+        archive.write(bridge, "arbortab-bridge.exe")
         for script in sorted((REPO / "packaging" / "windows").iterdir()):
             archive.write(script, script.name)
         archive.write(REPO / "LICENSE", "LICENSE")
@@ -54,11 +51,13 @@ def zip_native(version: str, dll: Path, out: Path) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dll", required=True, type=Path)
+    parser.add_argument("--bridge", type=Path, help="default: arbortab-bridge.exe next to --dll")
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
+    bridge = args.bridge or args.dll.with_name("arbortab-bridge.exe")
     version = (REPO / "VERSION").read_text(encoding="utf-8").strip()
     args.out.mkdir(parents=True, exist_ok=True)
-    files = [zip_extension(version, args.out), zip_native(version, args.dll, args.out)]
+    files = [zip_extension(version, args.out), zip_native(version, args.dll, bridge, args.out)]
     for script in ("install.ps1", "uninstall.ps1"):
         files.append(Path(shutil.copy(REPO / "packaging" / "windows" / script, args.out / script)))
     sums = "".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n" for f in files)

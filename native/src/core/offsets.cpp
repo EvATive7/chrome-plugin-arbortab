@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "core/log.h"
+#include "core/offsets_trust.h"
 #include "core/paths.h"
 #include "proxy/exports.h"
 #include "json.hpp"
@@ -16,15 +17,21 @@
 namespace arbortab {
 namespace {
 
-constexpr const wchar_t* kOffsetsUrlPrefix =
-    L"https://raw.githubusercontent.com/EvATive7/chrome-plugin-arbortab/offsets/win64/";
-constexpr const wchar_t* kMirrorUrlPrefix =
-    L"https://cdn.jsdelivr.net/gh/EvATive7/chrome-plugin-arbortab@offsets/win64/";
-
-// "s<schema>/<key>.json" below one of the prefixes above.
+// "win64/s<schema>/<key>.json" below the offsets branch root (core/offsets_trust.cpp).
 std::wstring RemoteName(const std::string& key) {
-  return L"s" + std::to_wstring(kOffsetsSchema) + L"/" + std::wstring(key.begin(), key.end()) +
-         L".json";
+  return L"win64/s" + std::to_wstring(kOffsetsSchema) + L"/" +
+         std::wstring(key.begin(), key.end()) + L".json";
+}
+
+bool ReadBytes(const std::wstring& path, std::string& data) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  std::ostringstream buffer;
+  buffer << file.rdbuf();
+  data = buffer.str();
+  return true;
 }
 
 bool SameKey(const std::string& a, const std::string& b) {
@@ -98,7 +105,6 @@ bool ReadWholeFile(const std::wstring& path, std::string& out) {
 
 }  // namespace
 
-const wchar_t* OffsetsUrlPrefix() { return kOffsetsUrlPrefix; }
 
 const char* OffsetsStatusName(OffsetsStatus status) {
   switch (status) {
@@ -340,6 +346,8 @@ int HttpGet(const std::wstring& url, std::string& body) {
   if (!session) {
     return 0;
   }
+  // Resolve, connect, send, receive (ms): a dead network must not stall the worker for minutes.
+  WinHttpSetTimeouts(session, 10000, 10000, 15000, 30000);
   int status = 0;
   HINTERNET connection = WinHttpConnect(session, host.c_str(), components.nPort, 0);
   if (connection) {
@@ -397,11 +405,16 @@ void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback on_resol
 
   std::thread([key, version, on_resolved, on_status] {
    try {
+    // Uses the stored list right away; a refresh only affects the next start.
+    RefreshRevocationListAsync();
     const std::wstring cached = CachedOffsetsPath(kOffsetsSchema, key);
     for (;;) {
       Offsets offsets;
       std::string error;
-      if (LoadOffsetsFromFile(cached, key, offsets, error)) {
+      std::string cached_bytes;
+      if (ReadBytes(cached, cached_bytes) && IsRevoked(Sha256Hex(cached_bytes))) {
+        error = "this table was revoked";
+      } else if (LoadOffsetsFromFile(cached, key, offsets, error)) {
         offsets.source = "cache";
         ARB_INFO("loaded offsets from cache: %ls", cached.c_str());
         on_status(OffsetsStatus::kReady, version);
@@ -423,18 +436,17 @@ void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback on_resol
       }
       on_status(OffsetsStatus::kResolving, version);
       ARB_INFO("downloading offsets for key %s (schema %d)", key.c_str(), kOffsetsSchema);
-      const std::wstring name = RemoteName(key);
-      const std::wstring urls[] = {std::wstring(kOffsetsUrlPrefix) + name,
-                                   std::wstring(kMirrorUrlPrefix) + name};
       bool downloaded = false;
       bool rejected = false;
-      for (const std::wstring& url : urls) {
-        std::string body;
-        const int status = HttpGet(url, body);
-        if (status != 200 || body.empty()) {
-          ARB_WARN("offsets download failed (%d): %ls", status, url.c_str());
-          continue;
-        }
+      std::string body;
+      RefreshRevocationList();
+      const FetchResult fetched = FetchSigned(RemoteName(key), body);
+      if (fetched == FetchResult::kRejected) {
+        rejected = true;
+      } else if (fetched == FetchResult::kOk && IsRevoked(Sha256Hex(body))) {
+        ARB_ERROR("the published offsets for key %s are revoked; waiting for a fixed table",
+                  key.c_str());
+      } else if (fetched == FetchResult::kOk) {
         const std::wstring temp = cached + L".tmp";
         {
           std::ofstream file(temp, std::ios::binary | std::ios::trunc);
@@ -447,12 +459,12 @@ void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback on_resol
           candidate.source = "download";
           offsets = std::move(candidate);
           downloaded = true;
-          ARB_INFO("downloaded offsets for Chrome %s from %ls", version.c_str(), url.c_str());
-          break;
+          ARB_INFO("downloaded signed offsets for Chrome %s", version.c_str());
+        } else {
+          ARB_ERROR("downloaded offsets failed validation: %s", parse_error.c_str());
+          DeleteFileW(temp.c_str());
+          rejected = true;
         }
-        ARB_ERROR("downloaded offsets failed validation: %s", parse_error.c_str());
-        DeleteFileW(temp.c_str());
-        rejected = true;
       }
       if (downloaded) {
         on_status(OffsetsStatus::kReady, version);

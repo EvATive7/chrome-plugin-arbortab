@@ -2,6 +2,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace arbortab {
 
@@ -12,6 +13,8 @@ void LogInit(LogLevel level);
 void LogShutdown();
 void LogSetLevel(LogLevel level);
 LogLevel LogGetLevel();
+// Last `count` lines of native.log, oldest first (for the extension's debug export).
+std::vector<std::string> LogTail(size_t count);
 void LogWrite(LogLevel level, const char* file, int line, const char* format, ...);
 
 }  // namespace arbortab

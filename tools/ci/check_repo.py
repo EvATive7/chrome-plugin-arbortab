@@ -6,10 +6,14 @@
 - Every locale has exactly the keys of the default locale, and every data-i18n key used by the
   extension pages exists.
 - The offsets in offsets/ match resolver/spec.yaml's schema and their own file names.
+- The bridge's host manifest allows the extension ID that manifest.json's "key" produces, and
+  the extension code and dev tools use that same ID and host name.
 """
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import re
 import sys
@@ -77,6 +81,32 @@ def check_offsets() -> None:
         print(f"note: offsets/ has no sample for the current schema {schema}")
 
 
+def extension_id(public_key_b64: str) -> str:
+    """Chrome's ID: the first 32 hex digits of SHA-256(public key), with 0-f mapped to a-p."""
+    digest = hashlib.sha256(base64.b64decode(public_key_b64)).hexdigest()[:32]
+    return "".join(chr(ord("a") + int(ch, 16)) for ch in digest)
+
+
+def check_bridge() -> None:
+    manifest = json.loads((REPO / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    if "nativeMessaging" not in manifest.get("permissions", []):
+        fail("extension/manifest.json lacks the nativeMessaging permission")
+    if "key" not in manifest:
+        fail("extension/manifest.json has no key: the bridge's allowed_origins needs a fixed ID")
+        return
+    expected = extension_id(manifest["key"])
+    host = json.loads((REPO / "packaging" / "windows" / "com.arbortab.bridge.json").read_text(encoding="utf-8"))
+    origin = f"chrome-extension://{expected}/"
+    if origin not in host.get("allowed_origins", []):
+        fail(f"packaging/windows/com.arbortab.bridge.json does not allow {origin}")
+    link = (REPO / "extension" / "src" / "background" / "native-link.js").read_text(encoding="utf-8")
+    if f"'{host.get('name')}'" not in link:
+        fail(f"native-link.js does not connect to the host {host.get('name')!r}")
+    dev = (REPO / "tools" / "dev" / "dev.py").read_text(encoding="utf-8")
+    if f'EXTENSION_ID = "{expected}"' not in dev:
+        fail(f"tools/dev/dev.py EXTENSION_ID is not {expected}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag")
@@ -84,6 +114,7 @@ def main() -> int:
     check_version(args.tag)
     check_locales()
     check_offsets()
+    check_bridge()
     for message in errors:
         print(f"error: {message}")
     print("ok" if not errors else f"{len(errors)} problem(s)")

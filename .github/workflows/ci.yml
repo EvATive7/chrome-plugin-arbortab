@@ -29,11 +29,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build version.dll (Release)
+      - name: Build version.dll and arbortab-bridge.exe (Release)
         shell: pwsh
         run: ./tools/dev/build-native.ps1 -Configuration Release
 
       - uses: actions/upload-artifact@v4
         with:
-          name: version.dll
-          path: artifacts/native/version.dll
+          name: native
+          path: |
+            artifacts/native/version.dll
+            artifacts/native/arbortab-bridge.exe

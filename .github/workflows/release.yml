@@ -24,7 +24,7 @@ jobs:
       - name: Unit tests
         run: node --test extension/test/*.test.mjs
 
-      - name: Build version.dll (Release)
+      - name: Build version.dll and arbortab-bridge.exe (Release)
         shell: pwsh
         run: ./tools/dev/build-native.ps1 -Configuration Release
 

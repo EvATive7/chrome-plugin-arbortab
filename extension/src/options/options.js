@@ -245,44 +245,84 @@ const OFFSETS_STATES = {
   error: ['bad', 'statusError', 'offsetsErrorDetail'],
 };
 
-function showRows({ setup = false, version = false, features = false }) {
-  $('native-setup-row').hidden = !setup;
-  $('native-version-row').hidden = !version;
-  $('native-features-row').hidden = !features;
+// Native module card: status and, when needed, the install command. Details live in About.
+function showSetup(visible, safeMode = false) {
+  $('native-setup-row').hidden = !visible;
+  $('native-safe-row').hidden = !safeMode;
 }
 
-async function reportNativeStatus() {
-  let reply;
-  try {
-    reply = await chrome.runtime.sendMessage({ type: 'arbortab.status' });
-  } catch {
-    showRows({});
+$('safe-retry').addEventListener('click', async () => {
+  $('safe-retry').disabled = true;
+  await chrome.runtime.sendMessage({ type: 'arbortab.safeModeReset' }).catch(() => {});
+  setTimeout(() => {
+    $('safe-retry').disabled = false;
+    void reportNativeStatus();
+  }, 800);
+});
+
+function renderNativeStatus(reply) {
+  if (!reply) {
+    showSetup(false);
     setStatus('', 'unknown', 'backgroundNoAnswer');
     return;
   }
-  if (!reply?.connected) {
-    showRows({ setup: true });
+  if (!reply.connected) {
+    showSetup(true);
     setStatus('bad', 'notConnected', 'nativeUnavailableDetail');
     return;
   }
-  $('native-version').textContent = reply.nativeVersion || '?';
   if (reply.updateNeeded) {
-    showRows({ setup: reply.updateNeeded === 'native', version: true });
+    showSetup(reply.updateNeeded === 'native');
     setStatus('bad', 'statusUpdateNeeded',
               reply.updateNeeded === 'native' ? 'updateNativeDetail' : 'updateExtensionDetail');
     return;
   }
+  if (reply.safeMode?.active) {
+    showSetup(false, true);
+    setStatus('bad', 'statusSafeMode', 'safeModeDetail', [String(reply.safeMode.crashes)]);
+    return;
+  }
+  showSetup(false);
   const offsets = reply.offsets?.status ?? 'ready';
   if (OFFSETS_STATES[offsets]) {
     const [state, label, detail] = OFFSETS_STATES[offsets];
-    showRows({ version: true });
     setStatus(state, label, detail, [reply.offsets?.chromeVersion || '?']);
     return;
   }
-  showRows({ version: true, features: true });
   setStatus('ok', 'connected', 'nativeConnectedDetail');
-  $('native-features').replaceChildren(
-    ...Object.entries(reply.features || {}).map(([name, enabled]) => {
+}
+
+const OFFSETS_LABELS = {
+  ready: 'offsetsReady',
+  resolving: 'statusPreparing',
+  waiting: 'statusWaiting',
+  disabled: 'statusDisabled',
+  error: 'statusError',
+};
+
+function renderAbout(reply) {
+  $('about-extension').textContent = chrome.runtime.getManifest().version;
+  const connected = Boolean(reply?.connected);
+  $('about-native').textContent = connected ? reply.nativeVersion || '?' : msg('notConnected');
+  const range = connected && reply.protocolMin != null
+    ? (reply.protocolMin === reply.protocolMax ? `${reply.protocolMin}` : `${reply.protocolMin}–${reply.protocolMax}`)
+    : '—';
+  $('about-protocol').textContent = msg('aboutProtocolValue', [String(reply?.protocol ?? '?'), range]);
+  $('about-transport-row').hidden = !connected;
+  $('about-transport').textContent =
+    msg(reply?.transport === 'pipe' ? 'transportPipe' : 'transportWebSocket');
+  const offsets = connected ? reply.offsets : null;
+  $('about-offsets-row').hidden = !offsets;
+  if (offsets) {
+    $('about-offsets').textContent = [
+      `Chrome ${offsets.chromeVersion || '?'}`,
+      `schema ${offsets.schema ?? '?'}`,
+      msg(OFFSETS_LABELS[offsets.status] || 'unknown'),
+    ].join(' · ');
+  }
+  $('about-features-row').hidden = !connected || Boolean(reply.updateNeeded);
+  $('about-features').replaceChildren(
+    ...Object.entries(reply?.features || {}).map(([name, enabled]) => {
       const chip = document.createElement('span');
       chip.className = `chip ${enabled ? 'on' : 'off'}`;
       chip.title = msg(enabled ? 'featureOnTitle' : 'featureOffTitle');
@@ -292,6 +332,48 @@ async function reportNativeStatus() {
     }),
   );
 }
+
+async function reportNativeStatus() {
+  let reply = null;
+  try {
+    reply = await chrome.runtime.sendMessage({ type: 'arbortab.status' });
+  } catch {
+    // The service worker did not answer: both views show "unknown".
+  }
+  renderNativeStatus(reply);
+  renderAbout(reply);
+}
+
+// Debug export: the service worker's report (no URLs or titles) as pretty JSON.
+const NATIVE_LOG = String.raw`%LOCALAPPDATA%\ArborTab\logs\native.log`;
+{
+  const hint = $('debug-hint');
+  const [before, after] = msg('debugInfoHint', ['@@path@@']).split('@@path@@');
+  const code = document.createElement('code');
+  code.textContent = NATIVE_LOG;
+  hint.replaceChildren(before, code, after ?? '');
+}
+
+async function debugReport() {
+  const report = await chrome.runtime.sendMessage({ type: 'arbortab.debug' });
+  return JSON.stringify(report, null, 2);
+}
+
+$('debug-copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(await debugReport());
+  const button = $('debug-copy');
+  button.textContent = msg('copied');
+  setTimeout(() => (button.textContent = msg('copyCommand')), 1500);
+});
+
+$('debug-download').addEventListener('click', async () => {
+  const blob = new Blob([await debugReport()], { type: 'application/json' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = `arbortab-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+});
 
 async function load() {
   const stored = await chrome.storage.sync.get('config');

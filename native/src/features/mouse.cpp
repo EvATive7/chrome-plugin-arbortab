@@ -12,7 +12,7 @@
 #include "core/log.h"
 #include "core/state.h"
 #include "core/ui_thread.h"
-#include "link/ws_server.h"
+#include "link/server.h"
 
 namespace arbortab {
 namespace {

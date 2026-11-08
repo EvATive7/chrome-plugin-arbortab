@@ -1,4 +1,5 @@
-# Removes the ArborTab native module from every place install.ps1 put it.
+# Removes the ArborTab native module (version.dll) and the Native Messaging bridge from every
+# place install.ps1 put them.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/EvATive7/chrome-plugin-arbortab/releases/latest/download/uninstall.ps1 | iex"
 #   uninstall.cmd                     (double-click, from an unpacked package)
@@ -7,7 +8,8 @@
 # -Purge also deletes %LOCALAPPDATA%\ArborTab (logs, cached offsets, config.ini).
 param(
   [switch]$Purge,
-  [switch]$Yes
+  [switch]$Yes,
+  [switch]$SkipBridge  # set by the elevated re-run: the bridge belongs to the original user
 )
 
 $ErrorActionPreference = 'Stop'
@@ -27,6 +29,9 @@ if (-not $ScriptPath) {
 }
 $dataDir = Join-Path $env:LOCALAPPDATA 'ArborTab'
 $record = Join-Path $dataDir 'install.json'
+$bridgeDir = Join-Path $dataDir 'bridge'
+$hostKey = 'HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.arbortab.bridge'
+$hasBridge = -not $SkipBridge -and ((Test-Path $hostKey) -or (Test-Path $bridgeDir))
 
 function Test-Writable([string]$dir) {
   $probe = Join-Path $dir ".arbortab-write-test-$PID"
@@ -59,18 +64,34 @@ foreach ($dir in @(
 $paths = @($paths | Where-Object { (Test-Path $_) -and (Get-Item $_).VersionInfo.ProductName -eq 'ArborTab' } |
   Select-Object -Unique)
 
-if ($paths.Count -eq 0 -and -not $Purge) { Write-Host 'ArborTab native module is not installed.'; exit 0 }
+if ($paths.Count -eq 0 -and -not $hasBridge -and -not $Purge) {
+  Write-Host 'ArborTab native module is not installed.'
+  exit 0
+}
 Write-Host 'Will remove:'
 $paths | ForEach-Object { Write-Host "  $_" }
+if ($hasBridge) { Write-Host "  $bridgeDir (and its Native Messaging registration)" }
 if ($Purge) { Write-Host "  $dataDir" }
 if (-not $Yes) {
   $answer = Read-Host 'Continue? [y/N]'
   if ($answer -notmatch '^(y|yes)$') { Write-Host 'Cancelled.'; exit 1 }
 }
 
+# Per user, so before any elevation. Unregistering first means Chrome stops starting the bridge
+# even if a running copy keeps the file locked until Chrome exits.
+if ($hasBridge) {
+  Remove-Item -Path $hostKey -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $bridgeDir -Recurse -Force -ErrorAction SilentlyContinue
+  if (Test-Path $bridgeDir) {
+    Write-Host "  unregistered the bridge; $bridgeDir is in use and stays until Chrome exits" -ForegroundColor Yellow
+  } else {
+    Write-Host "  removed $bridgeDir" -ForegroundColor Green
+  }
+}
+
 $needsAdmin = $paths | Where-Object { -not (Test-Writable (Split-Path -Parent $_)) }
 if ($needsAdmin -and -not (Test-Admin)) {
-  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"", '-Yes')
+  $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"", '-Yes', '-SkipBridge')
   if ($Purge) { $arguments += '-Purge' }
   $process = Start-Process powershell -Verb RunAs -ArgumentList $arguments -Wait -PassThru
   exit $process.ExitCode

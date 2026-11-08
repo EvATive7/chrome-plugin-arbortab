@@ -30,4 +30,5 @@ if (-not (Test-Path $dll)) { throw "expected artifact missing: $dll" }
 $target = Join-Path $repo $OutDir
 New-Item -ItemType Directory -Force -Path $target | Out-Null
 Copy-Item -Force $dll (Join-Path $target 'version.dll')
+Copy-Item -Force (Join-Path $build 'arbortab-bridge.exe') (Join-Path $target 'arbortab-bridge.exe')
 Write-Host "built $(Join-Path $target 'version.dll')"

@@ -81,6 +81,5 @@ using OffsetsStatusCallback = void (*)(OffsetsStatus status, const std::string& 
 void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback on_resolved,
                             OffsetsStatusCallback on_status);
 
-const wchar_t* OffsetsUrlPrefix();
 
 }  // namespace arbortab

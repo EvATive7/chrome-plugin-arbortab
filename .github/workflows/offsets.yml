@@ -2,6 +2,11 @@ name: Resolve Chrome offsets
 
 on:
   workflow_dispatch:
+    inputs:
+      revoke:
+        description: SHA-256 of a published offsets file that must not be used (see AGENTS.md)
+        required: false
+        default: ""
   schedule:
     - cron: "17 */6 * * *"
 
@@ -118,6 +123,41 @@ jobs:
           git add -A index.json win64
           git commit -m "offsets: Chrome $version (schema $schema)"
           git push origin offsets
+          $global:LASTEXITCODE = 0
+
+      # Every run: signs what is not signed yet (new tables, and any published before signing
+      # existed) and applies a requested revocation. version.dll refuses unsigned files.
+      - name: Sign the offsets branch
+        env:
+          OFFSETS_SIGNING_KEY: ${{ secrets.OFFSETS_SIGNING_KEY }}
+          REVOKE: ${{ inputs.revoke }}
+        shell: pwsh
+        run: |
+          if (-not $env:OFFSETS_SIGNING_KEY) { throw 'The OFFSETS_SIGNING_KEY secret is not set; see AGENTS.md.' }
+          # The publish step may have switched this checkout to the offsets branch.
+          git checkout --force '${{ github.sha }}'
+          git fetch origin offsets:refs/remotes/origin/offsets 2>$null
+          if ($LASTEXITCODE -ne 0) { Write-Host 'nothing published yet'; $global:LASTEXITCODE = 0; exit 0 }
+          git worktree add -B offsets D:\offsets-sign origin/offsets
+          if ($env:REVOKE) {
+            uv run --with cryptography python -I tools/ci/offsets_sign.py revoke D:\offsets-sign $env:REVOKE
+            if ($LASTEXITCODE -ne 0) { throw 'revoking failed' }
+          }
+          uv run --with cryptography python -I tools/ci/offsets_sign.py sign D:\offsets-sign
+          if ($LASTEXITCODE -ne 0) { throw 'signing failed' }
+          uv run --with cryptography python -I tools/ci/offsets_sign.py verify D:\offsets-sign
+          if ($LASTEXITCODE -ne 0) { throw 'signature check failed' }
+          Push-Location D:\offsets-sign
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            $message = if ($env:REVOKE) { "offsets: revoke $env:REVOKE" } else { 'offsets: sign' }
+            git commit -m $message
+            git push origin offsets
+          }
+          Pop-Location
           $global:LASTEXITCODE = 0
 
       - name: Create issue on failure

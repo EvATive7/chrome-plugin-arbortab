@@ -3,22 +3,26 @@
 ArborTab 让 Chrome 原生的**垂直标签栏**变成树状标签（Windows x64）。由两部分组成：
 
 - **扩展**（`extension/`，MV3）：维护标签树（父子、折叠），执行所有结构操作（`chrome.tabs.move` 等），并把显示状态推给原生模块。
-- **原生模块**（`native/`，`version.dll` 代理）：放在 `chrome.exe` 同目录，被浏览器进程加载后用 MinHook 接管标签栏的布局、绘制、鼠标和拖拽，实现缩进、隐藏、折叠标记、拖放落点。通过 `ws://127.0.0.1:47821-47825/arbortab` 与扩展通信（见“通信协议”）。
-- **偏移量**：原生模块所需的函数 RVA、字段偏移、vtable 等按 Chrome 版本由 `resolver/` 从官方 PDB 生成，CI 发布到 `offsets` 分支，运行时按 PDB key 下载并永久缓存（见“偏移量”）。
+- **原生模块**（`native/`，`version.dll` 代理）：放在 `chrome.exe` 同目录，被浏览器进程加载后用 MinHook 接管标签栏的布局、绘制、鼠标和拖拽，实现缩进、隐藏、折叠标记、拖放落点。扩展经 Native Messaging 桥（`arbortab-bridge.exe`）连到本浏览器的命名管道，WebSocket 作后备（见“通信协议”）。
+- **偏移量**：原生模块所需的函数 RVA、字段偏移、vtable 等按 Chrome 版本由 `resolver/` 从官方 PDB 生成，CI 签名后发布到 `offsets` 分支，运行时按 PDB key 下载、验签并永久缓存（见“偏移量”）。
 
 ## 目录结构
 
 ```
 VERSION             发布版本号的唯一来源（MAJOR.MINOR.PATCH）
 extension/          MV3 扩展；src/background/tree.js 是纯树模型，test/ 是单元测试；icons/ 由 assets/logo/make.py 生成
-native/             version.dll（CMake + MSVC）；src/core 基础设施、src/features 各功能、src/link 通信（protocol.h 协议号）
+native/             version.dll 与 arbortab-bridge.exe（CMake + MSVC）
+  src/core          基础设施：偏移量（offsets、offsets_trust 验签/撤回、offsets_key.h 公钥）、crash_guard（安全模式）、日志、路径
+  src/features      各功能的 hook
+  src/link          通信：server（与传输无关的消息处理）、pipe_server、ws_server、pipe_io（与桥共用）、protocol.h 协议号
+  bridge/           arbortab-bridge.exe（Native Messaging 宿主，只转发字节）
   third_party/      vendored MinHook、nlohmann/json
 resolver/           resolve.py + spec.yaml：从 chrome.dll + PDB 生成偏移量 JSON（缺任何一项即失败）；spec.yaml 的 schema 即偏移量 schema
 offsets/            offsets 分支的样例副本（运行时实际从 GitHub 下载）：index.json + win64/s<schema>/<key>.json
-packaging/windows/  随原生包发给用户的 install/uninstall 脚本（.cmd 包装 .ps1，兼容 Windows PowerShell 5.1）
+packaging/windows/  随原生包发给用户的 install/uninstall 脚本（.cmd 包装 .ps1，兼容 Windows PowerShell 5.1）与桥的宿主清单 com.arbortab.bridge.json
 assets/             logo（logo/make.py 生成）、README 截图
 tools/
-  ci/               CI 用：query-chrome.py、extract-chrome.ps1、offsets_index.py（offsets 分支布局）、check_repo.py（一致性检查）、package.py（打包）
+  ci/               CI 用：query-chrome.py、extract-chrome.ps1、offsets_index.py（offsets 分支布局）、offsets_sign.py（签名/撤回）、check_repo.py（一致性检查）、package.py（打包）
   dev/              本地开发：build-native.ps1、dev.py/dev.ps1（一键重建+重启沙盒）、sandbox.py、nativecheck.py
   re/               逆向/符号：pdbinfo.py、symq.py、dis.py
   test/             e2e.py（沙盒 Chrome 中的端到端检查）
@@ -29,11 +33,14 @@ artifacts/ build/   本地产物（已 gitignore）
 ## 常用命令
 
 ```sh
-# 构建原生模块 → artifacts/native/version.dll
+# 构建原生模块 → artifacts/native/version.dll、arbortab-bridge.exe
 pwsh -File tools/dev/build-native.ps1 [-Configuration Debug]
 
-# 一键开发循环：构建 → 停沙盒 → 装 DLL → 启动 → 加载扩展 → 从 native.log 核对正在运行的构建
+# 一键开发循环：构建 → 停沙盒 → 装 DLL、注册桥 → 启动 → 加载并重载扩展 → 从 native.log 核对构建与桥连接
 pwsh -File tools/dev/dev.ps1 [-NoBuild]
+
+# 停沙盒；--as-crash 让下次启动把这次当作异常退出（测安全模式）
+uv run python tools/dev/sandbox.py kill [--as-crash]
 
 # 扩展单元测试（树模型、协议检查）
 node --test extension/test/*.test.mjs
@@ -52,13 +59,17 @@ uv run --with websocket-client python tools/dev/nativecheck.py --layout
 
 # 生成偏移量
 uv run --with pefile --with pyyaml python resolver/resolve.py --dll <chrome.dll> --pdb <chrome.dll.pdb> --out <key>.json
+
+# 偏移量签名 / 校验 / 撤回（sign、revoke 需要 OFFSETS_SIGNING_KEY）
+uv run --with cryptography python tools/ci/offsets_sign.py sign|verify <root>
+uv run --with cryptography python tools/ci/offsets_sign.py revoke <root> <文件或 sha256>
 ```
 
 原生模块日志：`%LOCALAPPDATA%\ArborTab\logs\native.log`。
 
 ## 工作约定
 
-- **只动沙盒 Chrome，不碰本机安装的 Chrome**。沙盒目录默认 `C:\Users\evative7\Desktop\Playground\_test\portable`（`ARBORTAB_SANDBOX` 可改），CDP 端口 9334（`ARBORTAB_CDP_PORT`）。
+- **只动沙盒 Chrome，不碰本机安装的 Chrome**。沙盒目录由环境变量 `ARBORTAB_SANDBOX` 指定（必填，未设置时 `sandbox.py` 直接报错），CDP 端口 9334（`ARBORTAB_CDP_PORT`）。
 - 新版本 Chrome 需要新符号/字段时，改 `resolver/spec.yaml`，不要在原生代码里硬编码偏移（同时看“偏移量”里的 schema 规则）。
 - **失败即不改动**：偏移量、协议、身份任一校验不通过，原生功能整体关闭、标签栏保持原样，并通过 `status` 让设置页说明原因。不要为了“能用”放宽校验。
 - 用户可见文案改动要同步 `extension/_locales/` 全部 8 种语言，`check_repo.py` 会检查键是否一致。
@@ -86,7 +97,9 @@ uv run --with pefile --with pyyaml python resolver/resolve.py --dll <chrome.dll>
   win64/s<schema>/<pdb key>.json
   ```
 
-- **运行时**：DLL 按 `(kOffsetsSchema, pdbKey)` 查缓存 `%LOCALAPPDATA%\ArborTab\offsets\s<schema>\<key>.json`。没有缓存就依次从 GitHub raw、jsDelivr 下载，校验通过后原子写入缓存；都失败则每 30 分钟重试。同一个 PDB key 的二进制事实永不改变，所以**缓存永久有效、不做定期刷新**。
+- **签名**：分支上每个文件都有同名 `.sig`（ECDSA P-256 对文件原始字节签名，base64 的 r‖s），由 `tools/ci/offsets_sign.py` 生成；公钥编在 `native/src/core/offsets_key.h`，私钥只在仓库 secret `OFFSETS_SIGNING_KEY` 里（维护者另有离线备份）。offsets 工作流每次运行都会给尚未签名的文件补签。**DLL 拒绝没有签名或签名不对的下载**（报 `error`），`config.ini` 的 `offsetsMirror` 可加一个优先镜像（测试、自建），同样要验签。换密钥 = 发新版 DLL 并重签全部文件。
+- **撤回**：分支根目录的 `revoked.json`（同样签名）列出不得使用的文件的 SHA-256。按内容而不是按 key 撤回，所以修正后的表可以用同一个 key 重新发布。操作：手动运行 offsets 工作流并填 `revoke` 输入（文件的 sha256）。DLL 本地保存撤回表（`offsets\revoked.json`），启动时用已存的表检查缓存、后台每天最多刷新一次（新撤回下次启动生效）；下载前会先同步刷新。命中撤回的缓存会被删除并重新下载。
+- **运行时**：DLL 按 `(kOffsetsSchema, pdbKey)` 查缓存 `%LOCALAPPDATA%\ArborTab\offsets\s<schema>\<key>.json`。没有缓存就依次从 GitHub raw、jsDelivr 下载，验签、查撤回、校验通过后原子写入缓存；都失败则每 30 分钟重试。同一个 PDB key 的二进制事实永不改变，所以**缓存永久有效、不做定期刷新**，只有撤回表会刷新。
 - **加载校验**（`LoadOffsetsFromFile`）：`schema` 必须等于 `kOffsetsSchema`，`pdbKey` 必须等于当前 `chrome.dll` 的 key；不通过的缓存会被删除并重新下载。
 - **什么时候必须升 schema**：DLL 开始依赖旧文件里没有的条目（新增 hook、字段、vtable 等），或文件格式变化。做法：
   1. `spec.yaml` 的 `schema` 与 `kOffsetsSchema` 同时 +1；
@@ -97,14 +110,30 @@ uv run --with pefile --with pyyaml python resolver/resolve.py --dll <chrome.dll>
 
 ## 通信协议
 
-- **传输**：DLL 在 `chrome.dll` 映射后**立即**启动 WebSocket 服务（127.0.0.1:47821–47825 中第一个可用端口），不等偏移量，这样扩展才能区分“未安装”和“等待偏移量”。扩展依次尝试这些端口；服务端校验 `Origin: chrome-extension://<id>`，`config.ini` 的 `extensions` 可限定 ID（为空时放行任意扩展，正式版前需收紧）。
-- **握手**：扩展发 `hello {protocol, extVersion}`；DLL 回 `hello {protocolMin, protocolMax, nativeVersion, features, offsets {status, schema, chromeVersion}}`。状态变化时（偏移量到位、功能启用）DLL 主动推送同样结构的 `status`。
-- **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount、外观配置），DLL 只负责照着画、不保存树；DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragEnd`。调试：`debug.layout`。
-- **已知不足**：固定端口段存在多个 Chrome 实例时可能连错，也可能被本机其它程序抢占。计划改为 Native Messaging + 按浏览器 PID 命名的管道（见“发布与分发”的后续计划）。
+DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，这样扩展才能区分“未安装”和“等待偏移量”。两者承载完全相同的 JSON 消息，由 `link/server.cpp` 统一处理。
+
+- **主传输：Native Messaging 桥 + 命名管道**。
+  - 扩展 `chrome.runtime.connectNative('com.arbortab.bridge')`，Chrome 启动 `arbortab-bridge.exe`（通常经 `cmd /c`），第一个参数是调用方 origin。宿主清单的 `allowed_origins` 决定哪些扩展能启动它。
+  - 桥沿父进程链找到启动它的浏览器，连 `\\.\pipe\arbortab-<浏览器 PID>`，先发 `bridge.hello {origin, bridgeVersion}`，之后只转发字节（管道与 Native Messaging 的分帧相同：32 位小端长度 + JSON）。找不到管道就回一条 `bridge.unavailable` 后退出。
+  - DLL 侧：管道用 `FILE_FLAG_FIRST_PIPE_INSTANCE` 防抢注，DACL 只允许当前用户和 SYSTEM，拒绝远程；连上后用 `GetNamedPipeClientProcessId` 确认对方的祖先进程里有本浏览器，否则断开。
+  - 两端都用 overlapped I/O：同步句柄上一个线程挂着读时，另一个线程的写会被串行化卡住。
+  - 每个浏览器实例只和自己的扩展配对，不占端口，Native Messaging 端口还能让 service worker 保持存活。
+- **后备：WebSocket** `ws://127.0.0.1:47821–47825/arbortab`，给没有桥的旧安装和开发工具（`nativecheck.py`、`e2e.py` 的 `debug.layout`）用。服务端校验 `Origin: chrome-extension://<id>`。
+- **扩展的选择顺序**（`native-link.js`）：先连桥；桥未注册（`missing`）、浏览器里没有模块（`module-not-loaded`）或其它失败时，本轮改试 WebSocket；都失败就退避重试（最长 30 秒）。当前传输和桥的状态会出现在设置页“关于与诊断”和调试信息里。
+- **来源限制**：`config.ini` 的 `extensions` 可限定扩展 ID，两个传输都适用；为空时放行任意扩展（桥本身已受 `allowed_origins` 限制）。
+- **握手**：扩展发 `hello {protocol, extVersion}`；DLL 回 `hello {protocolMin, protocolMax, nativeVersion, features, offsets {status, schema, chromeVersion}, safeMode {active, crashes, limit}}`。状态变化时（偏移量到位、功能启用）DLL 主动推送同样结构的 `status`。
+- **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount、外观配置），DLL 只负责照着画、不保存树；`safeMode.reset`（用户在设置页点“重新启用”）。DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragEnd`。
+- **诊断**：`debug.report`（版本、构建、PID、传输、偏移量来源、安全模式、config、计数器、`native.log` 末尾 120 行；协议不兼容时也允许）、`debug.layout`（布局快照，测试用）。
+
+## 安全模式（崩溃保护）
+
+`core/crash_guard`：hook 装上前在 `%LOCALAPPDATA%\ArborTab\sessions\<pid>.session` 写会话文件，正常退出（`DLL_PROCESS_DETACH` 且进程在退出）时删除并清零计数。下次启动时，进程已不存在的会话文件算一次异常退出（被强杀也算，与 Chrome 自己的判断一致）。同一 `(模块版本, chrome.dll key)` **连续 2 次**后不再安装 hook，状态里 `safeMode.active=true`，设置页显示“已暂停”和“重新启用”按钮（立即重装 hook，不用重启）。换 Chrome 版本或模块版本自动从零计。`config.ini` 的 `safeMode=0` 可关闭。
+- 开发时 `sandbox.py kill`（`dev.ps1` 会调用）会删掉被杀进程的会话文件，否则两次重启就会进安全模式；要测安全模式用 `kill --as-crash`。
 
 ## 发布与分发
 
 - **流程**：改 `VERSION` 与 manifest → 合入 main（`ci.yml` 通过）→ 推 `vX.Y.Z` tag → `release.yml` 构建并创建**草稿** Release（扩展 zip、原生 zip、单独的 install.ps1/uninstall.ps1、SHA256SUMS）→ 在沙盒里人工验证真实拖拽 → 发布草稿。
+- **前提**：仓库 secret `OFFSETS_SIGNING_KEY` 已设置（没有它 offsets 工作流会失败，DLL 也拿不到可用的偏移量）。
 - **用户安装方式**：设置页（未连接或需要更新时）给出一行命令，README 里也有同一行：
 
   ```
@@ -116,19 +145,19 @@ uv run --with pefile --with pyyaml python resolver/resolve.py --dll <chrome.dll>
   - `install.ps1` 发现身边没有 `version.dll`（即一行命令模式），就通过 GitHub API 下载最新 Release 的 `arbortab-native-*-win64.zip`，解压后运行包内的 `install.ps1`。提权重启必须基于文件，所以要先落盘再运行；`uninstall.ps1` 同理，会先把自己下载到临时目录。
   - 在 `irm | iex` 下**绝不能调用 `exit`**（会关掉用户的控制台），只能 `return`/`throw`；Windows PowerShell 5.1 要显式启用 TLS 1.2 才能访问 GitHub。
   - 测试时用环境变量 `ARBORTAB_PACKAGE`（本地 zip，代替下载）和 `ARBORTAB_CHROME_DIR`（目标目录，如沙盒）。`iex` 无法传参，便携版 Chrome 也只能用 `ARBORTAB_CHROME_DIR` 指定，**测试时务必设置它，否则会装进本机 Chrome**。
-- **原生包**：`version.dll` + `install.cmd`/`install.ps1` + `uninstall.cmd`/`uninstall.ps1` + LICENSE，供想先检查文件再安装的用户使用。安装脚本会：
+- **原生包**：`version.dll` + `arbortab-bridge.exe` + `com.arbortab.bridge.json` + `install.cmd`/`install.ps1` + `uninstall.cmd`/`uninstall.ps1` + LICENSE，供想先检查文件再安装的用户使用。安装脚本会：
   - 找到系统级和用户级 Chrome，并要求 Chrome 已退出；
+  - 在**提权之前**以当前用户身份装桥：复制到 `%LOCALAPPDATA%\ArborTab\bridge\`，并在 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.arbortab.bridge` 注册（提权后的重跑带 `-SkipBridge`，因为 HKCU 属于原用户）；卸载同理，先注销再删除；
   - 只在目录不可写时才请求管理员权限；
-  - 拒绝覆盖不是 ArborTab 的 `version.dll`（按版本资源的 ProductName 判断）；
+  - 拒绝覆盖不是 ArborTab 的 `version.dll`，也不安装不是 ArborTab 的桥（按版本资源的 ProductName 判断，两个二进制共用 `version.rc.in`）；
   - 把安装位置记录到 `%LOCALAPPDATA%\ArborTab\install.json`，供卸载使用。
-- **扩展包**：打包时去掉 manifest 的 `key`（商店会分配自己的 ID）、测试和签名材料。
-- **后续计划**（尚未实现）：Native Messaging 桥替换 WebSocket；偏移量签名（ed25519，公钥编入 DLL）与撤回通道；DLL 代码签名；商店自动上传；extended-stable 等更多渠道。实测待办：Chrome 自动更新后 `Application\version.dll` 是否保留；SmartScreen/Defender 对未签名 DLL 的反应。
+- **扩展包**：**保留** manifest 的 `key`，这样解压加载的 Release 与开发版 ID 相同（`egjpjafmlomkpnncliaigklbdbflface`），正好是桥的 `allowed_origins`；只去掉测试和签名材料。上架商店后会得到另一个 ID，届时把它加进 `com.arbortab.bridge.json` 的 `allowed_origins`。`check_repo.py` 会核对 key 推出的 ID、宿主清单、`native-link.js` 的宿主名和 `dev.py` 的 `EXTENSION_ID` 一致。
+- **后续计划**（尚未实现）：上架商店（并把商店 ID 加入 `allowed_origins`）；DLL 与桥的代码签名；商店自动上传；extended-stable 等更多渠道；确认所有用户都有桥后移除 WebSocket 后备。实测待办：Chrome 自动更新后 `Application\version.dll` 是否保留；SmartScreen/Defender 对未签名 DLL 与桥的反应。
 
 ## 环境
 
-- Windows x64，VS 2022 Build Tools（MSVC 14.44，`vcvars64.bat`）、Windows SDK 10.0.26100、cmake + Ninja、uv、node。
-- cdb：`C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\`
-- 本地 PDB 缓存（Chrome 156，5.7GB）：`C:\Users\evative7\Desktop\Playground\_dl\pdb\chrome.dll.pdb`
+- Windows x64，VS 2022 Build Tools（MSVC，`vcvars64.bat`）、Windows SDK、cmake + Ninja、uv、node；崩溃分析要用 Windows SDK 的 Debugging Tools（cdb）。
+- **本机信息**（沙盒路径、本地 PDB 缓存、工具链的具体位置和版本）写在根目录的 `AGENTS.md.local`。它被 gitignore、不提交，`CLAUDE.md` 会一并引用；换机器时参照本节自建一份。
 - 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。该版本全部 RVA/偏移见 `offsets/win64/s1/B2C7C3B72F30D3ED4C4C44205044422E1.json`。
 
 ### Chromium 源码取用
@@ -192,6 +221,7 @@ git sparse-checkout set --no-cone <目录...>
 14. **读 `host_view_` 的 `views::View::children_` 拿不到子 view**（读到空集合）。落点判定改用布局自己产出的快照：上一轮布局里每行可见 TabView 的矩形（容器坐标，已含缩进与隐藏处理）。
 15. **标签条内部不要调用原生拖拽 handler**：它在每次移动时都改 tab model，触发原生“其他标签让位”的实时重排，接管压不住。
 16. **快捷键：Chrome 会拒绝部分字母组合**（如 `Alt+Shift+KeyW`），可用的组合是 `Alt+Shift+Comma` / `Alt+Shift+Up` / `Alt+Shift+Down`。
+17. **沙盒重启后扩展可能还在跑旧代码**：版本号不变时，Chrome 会沿用缓存的 service worker 脚本，`Extensions.loadUnpacked` 同一路径也不会刷新。改了扩展代码后，先在 service worker 里执行 `chrome.runtime.reload()` 再测；否则测试可能对着旧代码通过。
 
 ## 符号与偏移核对经验
 
@@ -225,6 +255,7 @@ git sparse-checkout set --no-cone <目录...>
 
   预先在 `Default\Preferences` 写入 `{"vertical_tabs":{"enabled":true,"collapsed_state":false,"uncollapsed_width":240}}`，启动后直接显示垂直标签。
 - **加载扩展**：通过 CDP 浏览器级 WebSocket 发送 `Extensions.loadUnpacked {path}`。Chrome 137+ 正式版已不支持 `--load-extension`。
+- **用户侧诊断**：扩展在 service worker 内存里保留最近 200 条事件（`diagnostics.js`：连接、断开、hello/status、消息处理失败），设置页“关于与诊断”可复制或下载调试信息：扩展侧（版本、连接方式与偏移量状态、设置、树的规模、事件）加上原生侧的 `debug.report`（含 `native.log` 末尾 120 行），**不含网址和标题**。新增事件或字段时保持这一点。`native.log` 超过 1MB 轮转，保留 3 份旧文件。
 - **自动化断言**：CDP 附加到扩展 service worker，调用 `arbortab.getState()` 读树（`windows[id] = {order, parents, collapsed}`）；原生侧用 `debug.layout` 取布局快照，回复里的 `stats.dropTarget` / `stats.dropZone` 可直接断言落点，不必截图。
 - **截图核对**：`sandbox.py shot <png>` 按窗口矩形截图，人工核对。
 - **崩溃分析**：沙盒配置目录下 `Crashpad\reports\*.dmp` 用 `cdb -z <dmp> -c ".ecxr; r; kn"` 查看；旧版 cdb 读不了新 PDB，地址可用 `symq.py` 反查。事件查看器的 Application 日志里也有崩溃记录。

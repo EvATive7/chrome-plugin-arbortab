@@ -22,10 +22,14 @@ import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_SANDBOX = Path(r"C:\Users\evative7\Desktop\Playground\_test\portable")
-SANDBOX = Path(os.environ.get("ARBORTAB_SANDBOX", DEFAULT_SANDBOX))
+# Machine-specific: a copied Chrome (app/) plus its profile (prof/). See AGENTS.md.local.
+if not os.environ.get("ARBORTAB_SANDBOX"):
+    raise SystemExit("sandbox: set ARBORTAB_SANDBOX to the sandbox Chrome directory (see AGENTS.md)")
+SANDBOX = Path(os.environ["ARBORTAB_SANDBOX"]).resolve()
 APP = SANDBOX / "app"
 PROFILE = SANDBOX / "prof"
+# Matches only processes started from the sandbox copy, never the installed Chrome.
+SANDBOX_FILTER = "Where-Object { $_.ExecutablePath -like '%s\\*' } | " % str(APP).replace("'", "''")
 PORT = int(os.environ.get("ARBORTAB_CDP_PORT", "9334"))
 
 
@@ -47,13 +51,23 @@ def ps(cmd: str) -> str:
 def sandbox_pids() -> list[int]:
     raw = ps(
         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-        "Where-Object { $_.ExecutablePath -like '*_test*portable*' } | "
+        + SANDBOX_FILTER +
         "ForEach-Object { $_.ProcessId }"
     )
     return [int(line) for line in raw.split() if line.strip().isdigit()]
 
 
-def kill() -> None:
+def forget_sessions(pids: list[int]) -> None:
+    """A forced kill is not a crash: drop the crash guard's session files of these processes
+    (native/src/core/crash_guard.h), or two dev restarts would put the module in safe mode."""
+    sessions = Path(os.environ.get("LOCALAPPDATA", "")) / "ArborTab" / "sessions"
+    for pid in pids:
+        (sessions / f"{pid}.session").unlink(missing_ok=True)
+
+
+def kill(as_crash: bool = False) -> None:
+    """Stops the sandbox. as_crash=True keeps the session files, so the next start counts
+    the kill as an abnormal exit (for testing safe mode)."""
     pids = sandbox_pids()
     if not pids:
         print("sandbox: no running processes")
@@ -61,12 +75,14 @@ def kill() -> None:
     subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-         "Where-Object { $_.ExecutablePath -like '*_test*portable*' } | "
+         + SANDBOX_FILTER +
          "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"],
         capture_output=True,
     )
     for _ in range(50):
         if not sandbox_pids():
+            if not as_crash:
+                forget_sessions(pids)
             print(f"sandbox: stopped {len(pids)} processes")
             return
         time.sleep(0.2)
@@ -206,7 +222,7 @@ def window_rect(pid: int) -> tuple[int, int, int, int]:
 def main_window_pid() -> int:
     raw = ps(
         "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
-        "Where-Object { $_.ExecutablePath -like '*_test*portable*' } | "
+        + SANDBOX_FILTER +
         "Where-Object { $_.CommandLine -notlike '*--type=*' } | "
         "ForEach-Object { $_.ProcessId }"
     )
@@ -253,7 +269,9 @@ def main() -> None:
     p_shot.set_defaults(func=lambda a: shot(Path(a.out)))
 
     p_kill = sub.add_parser("kill")
-    p_kill.set_defaults(func=lambda _a: kill())
+    p_kill.add_argument("--as-crash", action="store_true",
+                        help="count the kill as a crash (tests the native safe mode)")
+    p_kill.set_defaults(func=lambda a: kill(a.as_crash))
 
     p_tabs = sub.add_parser("tabs")
     p_tabs.set_defaults(func=cmd_tabs)

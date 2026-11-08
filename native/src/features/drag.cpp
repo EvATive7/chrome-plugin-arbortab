@@ -14,7 +14,7 @@
 #include "features/anim.h"
 #include "features/layout.h"
 #include "features/paint.h"
-#include "link/ws_server.h"
+#include "link/server.h"
 
 namespace arbortab {
 namespace {

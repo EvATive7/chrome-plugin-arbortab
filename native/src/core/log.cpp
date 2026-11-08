@@ -34,16 +34,29 @@ const char* LevelName(LogLevel level) {
   return "?";
 }
 
-void RotateLocked() {
+// Size of the open log, or of the file on disk while none is open.
+long long LogSizeLocked() {
   LARGE_INTEGER size{};
-  if (g_file == INVALID_HANDLE_VALUE || !GetFileSizeEx(g_file, &size)) {
+  if (g_file != INVALID_HANDLE_VALUE) {
+    return GetFileSizeEx(g_file, &size) ? size.QuadPart : 0;
+  }
+  WIN32_FILE_ATTRIBUTE_DATA data{};
+  if (!GetFileAttributesExW(LogPath().c_str(), GetFileExInfoStandard, &data)) {
+    return 0;
+  }
+  return (static_cast<long long>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+}
+
+// Shifts native.log -> .1 -> .2 ... once it reaches kMaxLogBytes. Checked on open and after
+// writes, so a long session with debug logging stays bounded too.
+void RotateLocked() {
+  if (LogSizeLocked() < kMaxLogBytes) {
     return;
   }
-  if (size.QuadPart < kMaxLogBytes) {
-    return;
+  if (g_file != INVALID_HANDLE_VALUE) {
+    CloseHandle(g_file);
+    g_file = INVALID_HANDLE_VALUE;
   }
-  CloseHandle(g_file);
-  g_file = INVALID_HANDLE_VALUE;
   const std::wstring base = LogPath();
   for (int index = kMaxLogFiles - 1; index >= 1; --index) {
     wchar_t from[MAX_PATH];
@@ -94,6 +107,44 @@ LogLevel LogGetLevel() {
   return g_level;
 }
 
+std::vector<std::string> LogTail(size_t count) {
+  constexpr LONGLONG kWindow = 32 * 1024;
+  std::vector<std::string> lines;
+  HANDLE file = CreateFileW(LogPath().c_str(), GENERIC_READ,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    return lines;
+  }
+  LARGE_INTEGER size{};
+  GetFileSizeEx(file, &size);
+  LARGE_INTEGER start{};
+  start.QuadPart = size.QuadPart > kWindow ? size.QuadPart - kWindow : 0;
+  SetFilePointerEx(file, start, nullptr, FILE_BEGIN);
+  std::string text(static_cast<size_t>(size.QuadPart - start.QuadPart), '\0');
+  DWORD read = 0;
+  ReadFile(file, text.data(), static_cast<DWORD>(text.size()), &read, nullptr);
+  CloseHandle(file);
+  text.resize(read);
+  size_t begin = start.QuadPart > 0 ? text.find('\n') + 1 : 0;  // drop the partial first line
+  while (begin < text.size()) {
+    size_t end = text.find('\n', begin);
+    if (end == std::string::npos) {
+      end = text.size();
+    }
+    std::string line = text.substr(begin, end - begin);
+    if (!line.empty() && line.back() == '\r') {
+      line.pop_back();
+    }
+    lines.push_back(std::move(line));
+    begin = end + 1;
+  }
+  if (lines.size() > count) {
+    lines.erase(lines.begin(), lines.end() - static_cast<std::ptrdiff_t>(count));
+  }
+  return lines;
+}
+
 void LogWrite(LogLevel level, const char* file, int line, const char* format, ...) {
   std::lock_guard<std::mutex> lock(g_mutex);
   if (!g_initialized || level > g_level) {
@@ -133,6 +184,12 @@ void LogWrite(LogLevel level, const char* file, int line, const char* format, ..
 
   DWORD bytes = 0;
   WriteFile(g_file, buffer, static_cast<DWORD>(written), &bytes, nullptr);
+  // Checking the size costs a system call: do it every 256 lines.
+  static unsigned lines = 0;
+  if ((++lines & 0xFF) == 0 && LogSizeLocked() >= kMaxLogBytes) {
+    RotateLocked();
+    OpenLocked();
+  }
 }
 
 }  // namespace arbortab

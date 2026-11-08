@@ -15,6 +15,7 @@ __pycache__/
 artifacts/
 build/
 out/
+dist/
 .vscode/
 
 # Local signing material (the manifest contains only the public key)
@@ -22,3 +23,6 @@ out/
 *.key
 *.p12
 *.pfx
+
+# Machine-specific notes for agents (see AGENTS.md, "环境")
+AGENTS.md.local

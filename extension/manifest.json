@@ -8,7 +8,8 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwoy5G909oXT/LS1XuFy1z9c+uh/m48czDP9U9gbyEJl4pZQPSlwfbl1RMWTnweMopHr4i/AOEj54d3zV4FcKdsPxI26YZy+OqR6SomV/0R0MKLuCZ/b4aQJYiXG40ejWXTJa59jL/PTECnGsFhV77xZiWg4kOKix6BnMrpHMpznmfS0IjefuUp6wQwJEWEx8shFvhkjWTEEbQQwWzsEc3gvNQdMLFpJ5CEiKkix00DaCadaMeOLGpCnmoGW/OfowtIWUPmBj7UxqLJepvB9tomswBgZbaCa8WPsRabJQ+K8L4J/S5wqDnSSUDqN9C0okvasEzwVACCtOWtttgZNnawIDAQAB",
   "permissions": [
     "tabs",
-    "storage"
+    "storage",
+    "nativeMessaging"
   ],
   "host_permissions": [
     "ws://127.0.0.1/*",

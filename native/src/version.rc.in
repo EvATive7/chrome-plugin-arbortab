@@ -1,4 +1,4 @@
-// Version resource of version.dll, generated from the repository's VERSION file.
+// Version resource of version.dll and arbortab-bridge.exe (native/CMakeLists.txt), generated from the repository's VERSION file.
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
@@ -7,7 +7,7 @@ VS_VERSION_INFO VERSIONINFO
  FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
  FILEFLAGS 0
  FILEOS VOS_NT_WINDOWS32
- FILETYPE VFT_DLL
+ FILETYPE @RC_FILETYPE@
  FILESUBTYPE VFT2_UNKNOWN
 BEGIN
   BLOCK "StringFileInfo"
@@ -15,10 +15,10 @@ BEGIN
     BLOCK "040904b0"
     BEGIN
       VALUE "CompanyName", "ArborTab"
-      VALUE "FileDescription", "ArborTab native module (version.dll proxy)"
+      VALUE "FileDescription", "@RC_DESCRIPTION@"
       VALUE "FileVersion", "@ARBORTAB_VERSION@"
-      VALUE "InternalName", "version"
-      VALUE "OriginalFilename", "version.dll"
+      VALUE "InternalName", "@RC_NAME@"
+      VALUE "OriginalFilename", "@RC_FILENAME@"
       VALUE "ProductName", "ArborTab"
       VALUE "ProductVersion", "@ARBORTAB_VERSION@"
       VALUE "LegalCopyright", "GPL-3.0-only"

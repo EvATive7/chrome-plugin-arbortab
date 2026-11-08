@@ -4,14 +4,16 @@
 
 #include <exception>
 #include <cstdlib>
+#include <mutex>
 
 #include "core/cig.h"
+#include "core/crash_guard.h"
 #include "core/hooks.h"
 #include "core/log.h"
 #include "core/offsets.h"
 #include "core/paths.h"
 #include "core/state.h"
-#include "link/ws_server.h"
+#include "link/server.h"
 #include "proxy/exports.h"
 
 namespace {
@@ -51,6 +53,23 @@ using LdrRegisterDllNotificationFn = LONG(NTAPI*)(ULONG, DllNotificationCallback
 
 std::string g_chrome_version;  // written by the offsets worker before every status update
 
+// Kept after resolution so the hooks can be installed later, when the user leaves safe mode.
+std::mutex g_install_mutex;
+arbortab::Offsets g_offsets;
+arbortab::CrashGuardState g_guard;
+bool g_hooks_installed = false;
+
+arbortab::ServerStatus ReadyStatus() {
+  arbortab::ServerStatus server;
+  server.offsets = arbortab::OffsetsStatusName(arbortab::OffsetsStatus::kReady);
+  server.chrome_version = g_offsets.chrome_version.empty() ? g_chrome_version : g_offsets.chrome_version;
+  server.pdb_key = g_offsets.pdb_key;
+  server.offsets_source = g_offsets.source;
+  server.safe_mode = g_guard.safe_mode;
+  server.crashes = g_guard.crashes;
+  return server;
+}
+
 void OnOffsetsStatus(arbortab::OffsetsStatus status, const std::string& chrome_version) {
   g_chrome_version = chrome_version;
   if (status == arbortab::OffsetsStatus::kReady) {
@@ -62,33 +81,59 @@ void OnOffsetsStatus(arbortab::OffsetsStatus status, const std::string& chrome_v
   arbortab::UpdateServerStatus(server);
 }
 
-void OnOffsetsResolved(const arbortab::Offsets& offsets) {
-  ARB_INFO("offsets ready (source=%s, chrome=%s, hooks=%zu)", offsets.source.c_str(),
-           offsets.chrome_version.c_str(), offsets.hooks.size());
+// Caller holds g_install_mutex.
+void InstallHooksLocked() {
+  if (g_hooks_installed) {
+    return;
+  }
+  g_hooks_installed = true;
+  // Before the first detour: a crash while installing counts as well.
+  arbortab::CrashGuardBeginSession();
   const arbortab::FeatureState features =
-      arbortab::InstallFeatureHooks(static_cast<HMODULE>(g_chrome_base), offsets);
+      arbortab::InstallFeatureHooks(static_cast<HMODULE>(g_chrome_base), g_offsets);
   ARB_INFO("features: %s", arbortab::DescribeFeatures(features).c_str());
   if (!features.layout) {
     ARB_WARN("no feature could be enabled; Chrome keeps its native tab strip");
   }
-  arbortab::ServerStatus server;
+  arbortab::ServerStatus server = ReadyStatus();
   server.features.layout = features.layout;
   server.features.twisty = features.twisty;
   server.features.paint = features.paint;
   server.features.drag = features.drag;
-  server.offsets = arbortab::OffsetsStatusName(arbortab::OffsetsStatus::kReady);
-  server.chrome_version = offsets.chrome_version.empty() ? g_chrome_version : offsets.chrome_version;
   arbortab::UpdateServerStatus(server);
+}
+
+void OnOffsetsResolved(const arbortab::Offsets& offsets) {
+  ARB_INFO("offsets ready (source=%s, chrome=%s, hooks=%zu)", offsets.source.c_str(),
+           offsets.chrome_version.c_str(), offsets.hooks.size());
+  std::lock_guard<std::mutex> lock(g_install_mutex);
+  g_offsets = offsets;
+  g_guard = arbortab::CrashGuardCheck(kModuleVersion, offsets.pdb_key);
+  if (g_guard.safe_mode) {
+    ARB_WARN("safe mode: the browser ended abnormally %d times in a row with the hooks "
+             "installed; they stay off until the extension asks to retry", g_guard.crashes);
+    arbortab::UpdateServerStatus(ReadyStatus());
+    return;
+  }
+  InstallHooksLocked();
+}
+
+// The user chose to try again from the settings page.
+void OnSafeModeReset() {
+  std::lock_guard<std::mutex> lock(g_install_mutex);
+  arbortab::CrashGuardReset();
+  g_guard = {};
+  if (g_offsets.loaded) {
+    InstallHooksLocked();
+  }
 }
 
 // The endpoint comes up before the offsets, so the extension can report "waiting for offsets"
 // instead of "not installed".
 void StartPipeline(HMODULE chrome) {
-  const int port = arbortab::StartWebSocketServer(kModuleVersion);
-  if (port) {
-    ARB_INFO("extension endpoint ready: ws://127.0.0.1:%d/arbortab", port);
-  } else {
-    ARB_WARN("extension endpoint unavailable; tab tree state cannot be applied");
+  arbortab::SetSafeModeResetHandler(&OnSafeModeReset);
+  if (!arbortab::StartLinkServers(kModuleVersion, kBuildStamp)) {
+    ARB_WARN("no extension endpoint; tab tree state cannot be applied");
   }
   arbortab::StartOffsetsResolution(chrome, &OnOffsetsResolved, &OnOffsetsStatus);
 }
@@ -256,7 +301,14 @@ DWORD WINAPI InitThread(LPVOID) {
 
 }  // namespace
 
-BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+  if (reason == DLL_PROCESS_DETACH) {
+    // reserved != nullptr: the process is exiting normally (ExitProcess), not being killed.
+    if (reserved) {
+      arbortab::CrashGuardEndSession();
+    }
+    return TRUE;
+  }
   if (reason != DLL_PROCESS_ATTACH) {
     return TRUE;
   }

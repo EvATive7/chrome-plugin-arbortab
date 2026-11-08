@@ -2,7 +2,8 @@
 // display state to the native module.
 
 import * as tree from './tree.js';
-import { NativeLink } from './native-link.js';
+import { NativeLink, PROTOCOL } from './native-link.js';
+import { record, recentEvents, treeSummary } from './diagnostics.js';
 
 const DEFAULT_CONFIG = {
   indent: 14,
@@ -41,6 +42,7 @@ const link = new NativeLink({
       scheduleSend();
     }
   },
+  onEvent: record,
   onHello: (message) => {
     link.nativeVersion = message.nativeVersion;
     lastSentVersion = -1;
@@ -408,7 +410,10 @@ let nativeQueue = Promise.resolve();
 function handleNativeMessage(message) {
   nativeQueue = nativeQueue
     .then(() => dispatchNativeMessage(message))
-    .catch((error) => console.warn('ArborTab: native message failed', message?.type, error));
+    .catch((error) => {
+      console.warn('ArborTab: native message failed', message?.type, error);
+      record('nativeMessageFailed', { type: message?.type, error: String(error) });
+    });
   return nativeQueue;
 }
 
@@ -594,6 +599,7 @@ async function commandIndent() {
 // ---------------------------------------------------------------------------------------
 
 async function init() {
+  record('started', { version: chrome.runtime.getManifest().version });
   await loadConfig();
   await loadSession();
   const tabs = await chrome.tabs.query({});
@@ -656,22 +662,56 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
 });
 
-// The options page asks for the live native status.
+function nativeStatus() {
+  return {
+    connected: link.isConnected,
+    features: link.features,
+    nativeVersion: link.native?.nativeVersion ?? null,
+    offsets: link.native?.offsets ?? null,
+    protocol: PROTOCOL,
+    protocolMin: link.native?.protocolMin ?? null,
+    protocolMax: link.native?.protocolMax ?? null,
+    updateNeeded: link.updateNeeded,
+    safeMode: link.native?.safeMode ?? null,
+    transport: link.transport,
+    bridge: link.bridge,
+    port: link.port,
+  };
+}
+
+/** Everything a bug report needs, without URLs or titles. */
+async function debugReport() {
+  const nativeReport = await link.request({ type: 'debug.report' }, 'debug.report');
+  const manifest = chrome.runtime.getManifest();
+  return {
+    generatedAt: new Date().toISOString(),
+    extension: { id: chrome.runtime.id, version: manifest.version },
+    browser: { userAgent: navigator.userAgent, language: chrome.i18n.getUILanguage() },
+    native: { ...nativeStatus(), report: nativeReport },
+    config,
+    tree: treeSummary(serializeWindows()),
+    events: recentEvents(),
+  };
+}
+
+// The options page asks for the live native status and for the debug export.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'arbortab.status') {
+  const handlers = {
+    'arbortab.status': nativeStatus,
+    'arbortab.debug': debugReport,
+    // The user turns the native features back on after safe mode kept them off.
+    'arbortab.safeModeReset': () => {
+      record('safeModeReset');
+      return link.send({ type: 'safeMode.reset' });
+    },
+  };
+  const handler = handlers[message?.type];
+  if (!handler) {
     return undefined;
   }
-  void ensureInit().then(() => {
-    sendResponse({
-      connected: link.isConnected,
-      features: link.features,
-      nativeVersion: link.native?.nativeVersion ?? null,
-      offsets: link.native?.offsets ?? null,
-      updateNeeded: link.updateNeeded,
-      port: link.port,
-      windows: windows.size,
-    });
-  });
+  void ensureInit()
+    .then(() => handler())
+    .then(sendResponse);
   return true;
 });
 

@@ -38,14 +38,14 @@
         display: flex;
         align-items: center;
         gap: 12px;
-        font-size: 24px;
+        font-size: 26px;
         font-weight: 600;
         margin: 0 0 4px;
       }
       h2 {
-        font-size: 16px;
+        font-size: 18px;
         font-weight: 600;
-        margin: 32px 0 12px 4px;
+        margin: 36px 0 12px 4px;
       }
       .card {
         background: var(--surface);
@@ -77,11 +77,66 @@
         min-width: 0;
       }
       .label > :first-child {
-        font-weight: 500;
+        font-size: 15px;
+        font-weight: 600;
       }
       .hint {
         color: var(--subtle);
-        font-size: 12.5px;
+        font-size: 13px;
+      }
+      /* Read-only facts (About): plain label, value on the right. */
+      .row.fact {
+        min-height: 48px;
+      }
+      .row.fact .label > :first-child {
+        font-size: 14px;
+        font-weight: 400;
+        color: var(--subtle);
+      }
+      .links {
+        display: flex;
+        gap: 16px;
+      }
+      .links a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .links a:hover {
+        text-decoration: underline;
+      }
+      .links a:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .buttons {
+        display: flex;
+        gap: 8px;
+      }
+      .button-tonal {
+        align-self: flex-start;
+        appearance: none;
+        height: 32px;
+        padding: 0 16px;
+        border: 1px solid var(--outline);
+        border-radius: 16px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--accent);
+        background: transparent;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .button-tonal:hover {
+        background: color-mix(in srgb, var(--accent) 8%, transparent);
+      }
+      .button-tonal:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .hint code {
+        font: 12px ui-monospace, "Cascadia Mono", Consolas, monospace;
+        overflow-wrap: anywhere;
       }
       .control {
         flex: none;
@@ -522,13 +577,8 @@
           <a class="manual" target="_blank" rel="noopener"
              href="https://github.com/EvATive7/chrome-plugin-arbortab/releases/latest" data-i18n="nativeManualDownload">Download the package manually</a>
         </div>
-        <div class="row" id="native-version-row" hidden>
-          <div class="label"><span data-i18n="nativeVersion">Version</span></div>
-          <span id="native-version" class="value"></span>
-        </div>
-        <div class="row" id="native-features-row" hidden>
-          <div class="label"><span data-i18n="nativeFeatures">Features</span></div>
-          <div id="native-features" class="chips"></div>
+        <div class="setup" id="native-safe-row" hidden>
+          <button type="button" class="button-tonal" id="safe-retry" data-i18n="safeModeRetry">Turn back on</button>
         </div>
       </section>
 
@@ -603,6 +653,51 @@
             <button type="button" id="confirmDown" aria-label="−">−</button>
             <input id="confirmThreshold" aria-labelledby="label-askClosingTree" type="number" min="0" max="99" step="1" inputmode="numeric" />
             <button type="button" id="confirmUp" aria-label="+">+</button>
+          </div>
+        </div>
+      </section>
+
+      <h2 data-i18n="about">About &amp; diagnostics</h2>
+      <section class="card">
+        <div class="row fact">
+          <div class="label"><span data-i18n="aboutExtension">Extension</span></div>
+          <span id="about-extension" class="value"></span>
+        </div>
+        <div class="row fact">
+          <div class="label"><span data-i18n="nativeModule">Native module</span></div>
+          <span id="about-native" class="value"></span>
+        </div>
+        <div class="row fact">
+          <div class="label"><span data-i18n="aboutProtocol">Protocol</span></div>
+          <span id="about-protocol" class="value"></span>
+        </div>
+        <div class="row fact" id="about-transport-row" hidden>
+          <div class="label"><span data-i18n="aboutTransport">Connection</span></div>
+          <span id="about-transport" class="value"></span>
+        </div>
+        <div class="row fact" id="about-offsets-row" hidden>
+          <div class="label"><span data-i18n="aboutOffsets">Offsets</span></div>
+          <span id="about-offsets" class="value"></span>
+        </div>
+        <div class="row fact" id="about-features-row" hidden>
+          <div class="label"><span data-i18n="nativeFeatures">Features</span></div>
+          <div id="about-features" class="chips"></div>
+        </div>
+        <div class="row fact">
+          <div class="label"><span data-i18n="aboutLinks">Project</span></div>
+          <div class="links">
+            <a href="https://github.com/EvATive7/chrome-plugin-arbortab" target="_blank" rel="noopener" data-i18n="viewOnGitHub">GitHub</a>
+            <a href="https://github.com/EvATive7/chrome-plugin-arbortab/issues/new" target="_blank" rel="noopener" data-i18n="reportIssue">Report a problem</a>
+          </div>
+        </div>
+        <div class="row">
+          <div class="label">
+            <span data-i18n="debugInfo">Debug information</span>
+            <span class="hint" id="debug-hint"></span>
+          </div>
+          <div class="buttons">
+            <button type="button" class="button-tonal" id="debug-copy" data-i18n="copyCommand">Copy</button>
+            <button type="button" class="button-tonal" id="debug-download" data-i18n="download">Download</button>
           </div>
         </div>
       </section>
