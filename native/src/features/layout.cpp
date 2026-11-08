@@ -1,6 +1,7 @@
 #include "features/layout.h"
 
 #include <atomic>
+#include <exception>
 #include <cstring>
 #include <mutex>
 
@@ -9,6 +10,7 @@
 
 #include "core/chrome_api.h"
 #include "core/log.h"
+#include "core/paths.h"
 #include "core/state.h"
 #include "core/ui_thread.h"
 
@@ -18,6 +20,7 @@ namespace {
 // views::ProposedLayout (size 0x190) / views::ChildLayout (size 0x30). All offsets come from
 // the offsets table at runtime; the layout of these two types is validated by the resolver.
 struct ProposedLayoutOffsets {
+  uint32_t layout_host_view = 0;
   uint32_t host_size = 0;
   uint32_t child_layouts = 0;
   uint32_t child_size = 0;
@@ -37,9 +40,14 @@ constexpr int kDefaultGap = 2;
 volatile LONG g_calls = 0;
 std::mutex g_snapshot_mutex;
 std::string g_snapshot_json = "{}";
-std::atomic<bool> g_snapshot_requested{false};
+// While this deadline is in the future every layout pass refreshes the geometry snapshot.
+std::atomic<ULONGLONG> g_snapshot_deadline{0};
 volatile LONG g_rewrites = 0;
 volatile LONG g_id_failures = 0;
+volatile LONG g_horizontal_skips = 0;
+volatile LONG g_empty_skips = 0;
+volatile LONG g_max_children = 0;
+volatile LONG g_faults = 0;
 
 // MSVC x64: rcx = this, rdx = hidden return buffer, r8 = &size_bounds.
 using CalcLayoutFn = void* (*)(const void* self, void* out_layout, const void* size_bounds);
@@ -72,14 +80,40 @@ int32_t& BoundsField(uint8_t* child, int index) {
 
 // Rewrites the child list of the proposed layout: hidden tabs get zero height and lose their
 // visibility, visible tabs are shifted by depth * indent and stacked without gaps.
-void RewriteLayout(void* layout_ptr, const void* host_view) {
+// Set from config.ini (layoutDisabled=1) to keep the hook installed but do nothing; used to
+// bisect layout problems during development.
+bool LayoutRewriteDisabled() {
+  static const bool disabled = ReadConfigInt("layoutDisabled", 0) != 0;
+  return disabled;
+}
+
+void RewriteLayout(void* layout_ptr, const void* layout_object) {
+  if (LayoutRewriteDisabled()) {
+    return;
+  }
   auto* layout = static_cast<uint8_t*>(layout_ptr);
   ChromeApi& api = GlobalApi();
-  if (!api.ready || !api.IsVertical(host_view)) {
+  if (!api.ready || !api.IsVertical(layout_object)) {
+    InterlockedIncrement(&g_horizontal_skips);
+    return;
+  }
+  // `layout_object` is the LayoutManagerBase, not the container view: the view that has to be
+  // invalidated lives in LayoutManagerBase::host_view_.
+  void* host_view = nullptr;
+  if (g_layout_offsets.layout_host_view) {
+    memcpy(&host_view, static_cast<uint8_t*>(const_cast<void*>(layout_object)) +
+                           g_layout_offsets.layout_host_view,
+           sizeof(host_view));
+  }
+  if (!host_view) {
     return;
   }
   const ChildRange children = ChildrenOf(layout, g_layout_offsets.child_layouts);
+  if (static_cast<LONG>(children.count) > g_max_children) {
+    g_max_children = static_cast<LONG>(children.count);
+  }
   if (!children.begin || children.count == 0) {
+    InterlockedIncrement(&g_empty_skips);
     return;
   }
 
@@ -100,7 +134,7 @@ void RewriteLayout(void* layout_ptr, const void* host_view) {
     return gap >= 0 && gap <= 16 ? gap : kDefaultGap;
   };
 
-  const bool want_snapshot = g_snapshot_requested.exchange(false);
+  const bool want_snapshot = GetTickCount64() < g_snapshot_deadline.load();
   nlohmann::json snapshot = nlohmann::json::array();
 
   int32_t y = 0;
@@ -183,16 +217,41 @@ void RewriteLayout(void* layout_ptr, const void* host_view) {
   }
 }
 
+// SEH-guarded entry point: a stray pointer in a rewritten layout must never kill the browser.
+void RewriteLayoutGuarded(void* layout_ptr, const void* layout_object) {
+  __try {
+    RewriteLayout(layout_ptr, layout_object);
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    InterlockedIncrement(&g_faults);
+  }
+}
+
 void* HookCalculateLayout(const void* self, void* out_layout, const void* size_bounds) {
   void* result = reinterpret_cast<CalcLayoutFn>(g_feature.original)(self, out_layout, size_bounds);
+  // A C++ exception escaping into Chrome's layout code terminates the browser, so the whole
+  // post-processing step is guarded.
+  try {
   const LONG call = InterlockedIncrement(&g_calls);
   UiThreadEnsureWindow();
-  UiThreadRecordHostView(const_cast<void*>(self));
-  if (result) {
-    RewriteLayout(result, self);
+  if (g_layout_offsets.layout_host_view) {
+    void* host_view = nullptr;
+    memcpy(&host_view, static_cast<uint8_t*>(const_cast<void*>(self)) +
+                           g_layout_offsets.layout_host_view,
+           sizeof(host_view));
+    UiThreadRecordHostView(host_view, const_cast<void*>(self));
   }
-  if (call <= 3) {
-    ARB_DEBUG("layout hook call %ld (host=%p result=%p)", call, self, result);
+  if (result) {
+    RewriteLayoutGuarded(result, self);
+  }
+  if (call <= 3 || call % 200 == 0) {
+    ARB_DEBUG("layout hook call %ld (layout=%p result=%p)", call, self, result);
+  }
+  } catch (const std::exception& exception) {
+    InterlockedIncrement(&g_faults);
+    ARB_ERROR("layout post-processing failed: %s", exception.what());
+  } catch (...) {
+    InterlockedIncrement(&g_faults);
+    ARB_ERROR("layout post-processing failed with an unknown exception");
   }
   return result;
 }
@@ -222,9 +281,18 @@ bool InstallLayoutFeature(HMODULE chrome_dll, const Offsets& offsets, LayoutFeat
     return true;
   };
   ProposedLayoutOffsets parsed;
-  if (!field("views::ProposedLayout.host_size", parsed.host_size) ||
+  const auto size_of = [&offsets](const char* name) -> uint32_t {
+    const auto entry = offsets.sizes.find(name);
+    return entry == offsets.sizes.end() ? 0 : entry->second;
+  };
+  parsed.child_size = size_of("views::ChildLayout");
+  if (parsed.child_size == 0) {
+    ARB_WARN("offsets table lacks sizeof(views::ChildLayout)");
+    return false;
+  }
+  if (!field("views::LayoutManagerBase.host_view_", parsed.layout_host_view) ||
+      !field("views::ProposedLayout.host_size", parsed.host_size) ||
       !field("views::ProposedLayout.child_layouts", parsed.child_layouts) ||
-      !field("views::ChildLayout.size", parsed.child_size) ||
       !field("views::ChildLayout.child_view", parsed.child_view) ||
       !field("views::ChildLayout.visible", parsed.child_visible) ||
       !field("views::ChildLayout.bounds", parsed.child_bounds)) {
@@ -259,10 +327,16 @@ bool InstallLayoutFeature(HMODULE chrome_dll, const Offsets& offsets, LayoutFeat
 }
 
 std::string DescribeLastLayoutJson() {
-  g_snapshot_requested = true;
+  g_snapshot_deadline = GetTickCount64() + 3000;
   std::lock_guard<std::mutex> lock(g_snapshot_mutex);
   return g_snapshot_json;
 }
+
+long LayoutHorizontalSkips() { return g_horizontal_skips; }
+long LayoutEmptySkips() { return g_empty_skips; }
+long LayoutMaxChildren() { return g_max_children; }
+
+long LayoutFaults() { return g_faults; }
 
 long LayoutCallCount() { return g_calls; }
 long LayoutRewriteCount() { return g_rewrites; }

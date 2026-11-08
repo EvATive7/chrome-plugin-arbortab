@@ -28,6 +28,12 @@ functions:
   views::View::InvalidateLayout:
     hook: false
     symbol: "?InvalidateLayout@View@views@@QEAAX_N@Z"
+  views::LayoutManagerBase::Layout:
+    hook: false
+    symbol: "?Layout@LayoutManagerBase@views@@UEAAXPEAVView@2@@Z"
+  views::LayoutManagerBase::InvalidateLayout:
+    hook: false
+    symbol: "?InvalidateLayout@LayoutManagerBase@views@@EEAAXXZ"
   views::View::SchedulePaint:
     hook: false
     symbol: "?SchedulePaint@View@views@@QEAAXXZ"
@@ -64,6 +70,7 @@ fields:
   TabCollectionNode.node_view_: [TabCollectionNode, node_view_]
   ui::Event.flags_: [ui::Event, flags_]
   ui::LocatedEvent.location_: [ui::LocatedEvent, location_]
+  views::LayoutManagerBase.host_view_: [views::LayoutManagerBase, host_view_]
   views::ProposedLayout.host_size: [views::ProposedLayout, host_size]
   views::ProposedLayout.child_layouts: [views::ProposedLayout, child_layouts]
   views::ChildLayout.child_view: [views::ChildLayout, child_view]
@@ -72,6 +79,7 @@ fields:
   views::ChildLayout.available_size: [views::ChildLayout, available_size]
 types:
   TabView: 0x690
+  views::LayoutManagerBase: 0x270
   UnpinnedTabContainerViewLayout: 0x278
   DraggedTabsContainer: 0x220
   TabCollectionNode: 0x118

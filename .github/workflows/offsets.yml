@@ -69,19 +69,29 @@ jobs:
 
       - name: Download PDB
         if: steps.existing.outputs.exists != 'true'
+        id: pdbfile
         shell: pwsh
         run: |
           $url = 'https://chromium-browser-symsrv.commondatastorage.googleapis.com/chrome.dll.pdb/${{ steps.pdb.outputs.key }}/chrome.dll.pdb'
           curl.exe -L --fail --retry 5 --compressed --output D:\arbortab\chrome.dll.pdb $url
+          if ($LASTEXITCODE -ne 0) {
+            # Google publishes symbols hours (sometimes days) after a release; the hourly
+            # schedule retries, so a missing PDB is a warning rather than a failure.
+            Write-Host "::warning::chrome.dll.pdb for ${{ steps.pdb.outputs.key }} is not on the symbol server yet"
+            "available=false" >> $env:GITHUB_OUTPUT
+            $global:LASTEXITCODE = 0
+          } else {
+            "available=true" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Resolve and validate offsets
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'
         shell: pwsh
         run: |
           uv run --with pefile --with pyyaml python resolver/resolve.py --dll D:\arbortab\extracted\chrome.dll --pdb D:\arbortab\chrome.dll.pdb --out "D:\arbortab\${{ steps.pdb.outputs.key }}.json"
 
       - name: Publish offsets branch
-        if: steps.existing.outputs.exists != 'true'
+        if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'
         shell: pwsh
         run: |
           $version = '${{ steps.chrome.outputs.version }}'
@@ -106,7 +116,7 @@ jobs:
           $global:LASTEXITCODE = 0
 
       - name: Create issue on failure
-        if: failure()
+        if: failure() && steps.pdbfile.outputs.available != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh

@@ -10,9 +10,9 @@ namespace arbortab {
 // hooked Views call); safe to call repeatedly.
 void UiThreadEnsureWindow();
 
-// Registers a tab container view that should be re-laid out and repainted after state
-// changes. Called from the UI thread on every layout pass; stale views are dropped.
-void UiThreadRecordHostView(void* view);
+// Registers a tab container view (and the layout manager that lays it out) so state changes
+// can trigger a synchronous layout pass. Called on the UI thread from the layout hook.
+void UiThreadRecordHostView(void* view, void* layout_manager);
 
 // Requests a refresh from any thread. The views are validated again on the UI thread.
 void UiThreadRequestRefresh();

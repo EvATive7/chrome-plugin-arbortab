@@ -28,5 +28,9 @@ std::string DescribeLastLayoutJson();
 long LayoutCallCount();
 long LayoutRewriteCount();
 long LayoutTabIdFailures();
+long LayoutHorizontalSkips();
+long LayoutEmptySkips();
+long LayoutMaxChildren();
+long LayoutFaults();
 
 }  // namespace arbortab

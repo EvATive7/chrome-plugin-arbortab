@@ -3,7 +3,7 @@
   "chromeVersion": "156.0.8078.80",
   "pdbName": "chrome.dll.pdb",
   "pdbKey": "B2C7C3B72F30D3ED4C4C44205044422E1",
-  "generatedAt": "2026-11-08T06:18:59Z",
+  "generatedAt": "2026-11-08T06:45:10Z",
   "functions": {
     "UnpinnedTabContainerViewLayout::CalculateProposedLayout": {
       "rva": "0x0993c680",
@@ -48,6 +48,14 @@
     "views::View::InvalidateLayout": {
       "rva": "0x044a1090",
       "prologue": "41 57 41 56 41 55 41 54 56 57 55 53 48 83 ec 68"
+    },
+    "views::LayoutManagerBase::Layout": {
+      "rva": "0x004b68a0",
+      "prologue": "56 57 55 53 48 83 ec 78 48 89 ce 48 8b 05 8e c7"
+    },
+    "views::LayoutManagerBase::InvalidateLayout": {
+      "rva": "0x056ab9f0",
+      "prologue": "56 57 55 53 48 83 ec 28 80 b9 98 00 00 00 00 75"
     },
     "views::View::SchedulePaint": {
       "rva": "0x047a09d0",
@@ -126,6 +134,7 @@
     "TabCollectionNode.node_view_": "0x100",
     "ui::Event.flags_": "0x50",
     "ui::LocatedEvent.location_": "0xb0",
+    "views::LayoutManagerBase.host_view_": "0x38",
     "views::ProposedLayout.host_size": "0x0",
     "views::ProposedLayout.child_layouts": "0x8",
     "views::ChildLayout.child_view": "0x0",
@@ -135,6 +144,7 @@
   },
   "sizes": {
     "TabView": "0x690",
+    "views::LayoutManagerBase": "0x270",
     "UnpinnedTabContainerViewLayout": "0x278",
     "DraggedTabsContainer": "0x220",
     "TabCollectionNode": "0x118",

@@ -15,41 +15,52 @@ bool StateStore::ReplaceAll(int client_id, const std::vector<int>& tabs,
                             const std::map<int, TabDisplayState>& states,
                             const DisplayConfig& config) {
   std::lock_guard<std::mutex> lock(mutex_);
-  std::map<int, TabDisplayState> snapshot;
+  bool changed = config_ != config;
+  config_ = config;
+
+  // Drop the tabs this client used to own but no longer reports, then apply the snapshot.
+  std::set<int> wanted(tabs.begin(), tabs.end());
+  std::vector<int>& previous = client_tabs_[client_id];
+  std::set<int> next;
+  for (int tab_id : previous) {
+    if (wanted.count(tab_id) == 0 && tabs_.erase(tab_id) > 0) {
+      changed = true;
+    }
+  }
   for (int tab_id : tabs) {
     const auto found = states.find(tab_id);
-    snapshot[tab_id] = found == states.end() ? TabDisplayState{} : found->second;
+    const TabDisplayState state = found == states.end() ? TabDisplayState{} : found->second;
+    const auto existing = tabs_.find(tab_id);
+    if (existing == tabs_.end() || !(existing->second == state)) {
+      tabs_[tab_id] = state;
+      changed = true;
+    }
+    next.insert(tab_id);
   }
-  const bool config_changed = config_.indent != config.indent ||
-                              config_.show_count != config.show_count ||
-                              config_.highlight_color != config.highlight_color ||
-                              config_.min_tab_width != config.min_tab_width;
-  const bool states_changed = clients_[client_id] != snapshot;
-  if (!config_changed && !states_changed) {
-    return false;
+  previous.assign(next.begin(), next.end());
+  if (changed) {
+    ++version_;
   }
-  clients_[client_id] = std::move(snapshot);
-  config_ = config;
-  ++version_;
-  return true;
+  return changed;
 }
 
 void StateStore::RemoveClient(int client_id) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (clients_.erase(client_id) > 0) {
-    ++version_;
+  const auto owned = client_tabs_.find(client_id);
+  if (owned == client_tabs_.end()) {
+    return;
   }
+  for (int tab_id : owned->second) {
+    tabs_.erase(tab_id);
+  }
+  client_tabs_.erase(owned);
+  ++version_;
 }
 
 TabDisplayState StateStore::Get(int tab_id) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  for (const auto& [client, tabs] : clients_) {
-    const auto found = tabs.find(tab_id);
-    if (found != tabs.end()) {
-      return found->second;
-    }
-  }
-  return TabDisplayState{};
+  const auto found = tabs_.find(tab_id);
+  return found == tabs_.end() ? TabDisplayState{} : found->second;
 }
 
 DisplayConfig StateStore::Config() const {
@@ -64,21 +75,23 @@ uint64_t StateStore::Version() const {
 
 size_t StateStore::ClientCount() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return clients_.size();
+  return client_tabs_.size();
 }
 
 std::string StateStore::Describe() const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::string text;
   char buffer[128];
-  for (const auto& [client, tabs] : clients_) {
+  for (const auto& [client, tabs] : client_tabs_) {
     _snprintf_s(buffer, sizeof(buffer), _TRUNCATE, "client%d=%zu tabs", client, tabs.size());
     if (!text.empty()) {
       text += ' ';
     }
     text += buffer;
   }
-  return text.empty() ? "no clients" : text;
+  _snprintf_s(buffer, sizeof(buffer), _TRUNCATE, " (%zu known tabs)", tabs_.size());
+  text += buffer;
+  return text;
 }
 
 }  // namespace arbortab

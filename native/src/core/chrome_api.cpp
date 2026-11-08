@@ -92,6 +92,22 @@ void ChromeApi::SchedulePaint(void* view) const {
   reinterpret_cast<Fn>(schedule_paint)(view);
 }
 
+void ChromeApi::LayoutNow(void* layout_manager, void* host_view) const {
+  if (!layout_manager || !host_view || !manager_layout) {
+    return;
+  }
+  using Fn = void (*)(void*, void*);
+  reinterpret_cast<Fn>(manager_layout)(layout_manager, host_view);
+}
+
+void ChromeApi::InvalidateManager(void* layout_manager) const {
+  if (!layout_manager || !manager_invalidate) {
+    return;
+  }
+  using Fn = void (*)(void*);
+  reinterpret_cast<Fn>(manager_invalidate)(layout_manager);
+}
+
 bool ResolveChromeApi(HMODULE chrome_dll, const Offsets& offsets, ChromeApi& api) {
   auto* base = reinterpret_cast<uint8_t*>(chrome_dll);
   const auto address = [base, &offsets](const char* name) -> void* {
@@ -110,6 +126,8 @@ bool ResolveChromeApi(HMODULE chrome_dll, const Offsets& offsets, ChromeApi& api
   resolved.invalidate_layout = address("views::View::InvalidateLayout");
   resolved.schedule_paint = address("views::View::SchedulePaint");
   resolved.fill_rect = address("gfx::Canvas::FillRect");
+  resolved.manager_layout = address("views::LayoutManagerBase::Layout");
+  resolved.manager_invalidate = address("views::LayoutManagerBase::InvalidateLayout");
 
   const auto slot = offsets.vtable_slots.find("tabs::TabModel::GetContents");
   resolved.get_contents_slot = slot == offsets.vtable_slots.end() ? -1 : slot->second;

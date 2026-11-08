@@ -45,6 +45,9 @@ target_link_libraries(version PRIVATE minhook winhttp shlwapi shell32)
 target_compile_definitions(version PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
 if(MSVC)
   target_compile_options(version PRIVATE /W4 /permissive- /Zc:__cplusplus /utf-8 /EHsc)
+  # Keep a PDB so crash addresses inside this DLL can be symbolised during development.
+  target_compile_options(version PRIVATE $<$<CONFIG:Release>:/Zi>)
+  target_link_options(version PRIVATE /DEBUG /OPT:REF /OPT:ICF)
 endif()
 
 # No import library or debug naming tricks: the artifact must be exactly version.dll.

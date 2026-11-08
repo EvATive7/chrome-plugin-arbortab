@@ -5,6 +5,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <set>
 #include <vector>
 
 namespace arbortab {
@@ -44,7 +45,10 @@ class StateStore {
 
  private:
   mutable std::mutex mutex_;
-  std::map<int, std::map<int, TabDisplayState>> clients_;
+  // Tab ids are unique inside one browser process, so a single flat table with
+  // last-writer-wins semantics is enough (and correct with several profiles connected).
+  std::map<int, TabDisplayState> tabs_;
+  std::map<int, std::vector<int>> client_tabs_;
   DisplayConfig config_;
   uint64_t version_ = 0;
 };

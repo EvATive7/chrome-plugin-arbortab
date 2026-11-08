@@ -206,7 +206,8 @@ ServerFeatures g_features;
 std::string g_native_version;
 int g_port = 0;
 SOCKET g_listen = INVALID_SOCKET;
-std::thread g_accept_thread;
+// Detached on purpose: a joinable std::thread with static storage duration aborts the process
+// from its destructor while the DLL is being unloaded.
 std::atomic<bool> g_running{false};
 std::mutex g_clients_mutex;
 std::map<int, std::shared_ptr<Client>> g_clients;
@@ -271,7 +272,7 @@ std::string NativeHelloJson() {
   return hello.dump();
 }
 
-void HandleMessage(Client& client, const std::string& text) {
+void HandleMessageUnsafe(Client& client, const std::string& text) {
   nlohmann::json message;
   try {
     message = nlohmann::json::parse(text);
@@ -324,7 +325,11 @@ void HandleMessage(Client& client, const std::string& text) {
       config.show_count = node.value("showCount", config.show_count);
       const std::string color = node.value("highlightColor", std::string());
       if (color.size() == 9 && color[0] == '#') {
-        config.highlight_color = static_cast<uint32_t>(std::stoul(color.substr(1), nullptr, 16));
+        try {
+          config.highlight_color = static_cast<uint32_t>(std::stoul(color.substr(1), nullptr, 16));
+        } catch (...) {
+          // keep the default colour
+        }
       }
     }
     if (GlobalState().ReplaceAll(client.id, tabs, states, config)) {
@@ -335,14 +340,36 @@ void HandleMessage(Client& client, const std::string& text) {
     return;
   }
   if (type == "debug.layout") {
+    // Force a layout pass so the snapshot describes the current state, not a stale one.
+    UiThreadRequestRefresh();
+    Sleep(600);
     nlohmann::json reply;
     reply["type"] = "debug.layout";
     reply["clients"] = static_cast<int>(GlobalState().ClientCount());
+    reply["stats"] = {{"layoutCalls", LayoutCallCount()},
+                      {"layoutRewrites", LayoutRewriteCount()},
+                      {"tabIdFailures", LayoutTabIdFailures()},
+                      {"uiRefreshes", UiThreadRefreshCount()},
+                      {"horizontalSkips", LayoutHorizontalSkips()},
+                      {"emptySkips", LayoutEmptySkips()},
+                      {"maxChildren", LayoutMaxChildren()}};
     reply["layouts"] = nlohmann::json::parse(DescribeLastLayoutJson(), nullptr, false);
     SendFrame(client, 0x1, reply.dump());
     return;
   }
   ARB_DEBUG("unhandled client message type '%s'", type.c_str());
+}
+
+// Any exception here would terminate the browser process, so the whole message handler is
+// guarded.
+void HandleMessage(Client& client, const std::string& text) {
+  try {
+    HandleMessageUnsafe(client, text);
+  } catch (const std::exception& exception) {
+    ARB_ERROR("message handling failed: %s", exception.what());
+  } catch (...) {
+    ARB_ERROR("message handling failed with an unknown exception");
+  }
 }
 
 void ClientLoop(std::shared_ptr<Client> client) {
@@ -401,7 +428,11 @@ void ClientLoop(std::shared_ptr<Client> client) {
       continue;
     }
     if (opcode == 0x1) {
-      HandleMessage(*client, payload);
+      try {
+        HandleMessage(*client, payload);
+      } catch (...) {
+        ARB_ERROR("unhandled failure while processing a client message");
+      }
     }
   }
   {
@@ -555,7 +586,7 @@ int StartWebSocketServer(const ServerFeatures& features, const std::string& nati
   }
 
   g_running = true;
-  g_accept_thread = std::thread(&AcceptLoop);
+  std::thread(&AcceptLoop).detach();
   ARB_INFO("websocket server listening on 127.0.0.1:%d", g_port);
   return g_port;
 }
@@ -568,9 +599,6 @@ void StopWebSocketServer() {
   if (g_listen != INVALID_SOCKET) {
     closesocket(g_listen);
     g_listen = INVALID_SOCKET;
-  }
-  if (g_accept_thread.joinable()) {
-    g_accept_thread.join();
   }
   std::map<int, std::shared_ptr<Client>> clients;
   {

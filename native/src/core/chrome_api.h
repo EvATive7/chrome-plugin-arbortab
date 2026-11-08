@@ -21,6 +21,8 @@ struct ChromeApi {
   void* invalidate_layout = nullptr;  // void (*)(void* view, bool invalidate_children)
   void* schedule_paint = nullptr;     // void (*)(void* view)
   void* fill_rect = nullptr;          // void (*)(void* canvas, const void* rect, uint32_t color)
+  void* manager_layout = nullptr;     // void (*)(void* layout_manager, void* host_view)
+  void* manager_invalidate = nullptr; // void (*)(void* layout_manager)
   int get_contents_slot = 3;
   std::vector<void*> tab_view_vtables;
   uint32_t off_tab_orientation = 0;   // UnpinnedTabContainerViewLayout::orientation_
@@ -37,6 +39,10 @@ struct ChromeApi {
 
   void InvalidateLayout(void* view) const;
   void SchedulePaint(void* view) const;
+  // Runs the layout manager of `host_view` right away (Chrome only schedules layouts for the
+  // next frame, which is too late for a WebSocket-driven state update).
+  void LayoutNow(void* layout_manager, void* host_view) const;
+  void InvalidateManager(void* layout_manager) const;
 };
 
 // Builds the API table from the offsets JSON. Returns false (and leaves Chrome untouched) when

@@ -491,6 +491,12 @@ nodes: Map<tabId, { parentId: number|null, collapsed: boolean }>
    - 只清这一位；不要顺带清 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`（131074）等其它属性，否则同样返回 `ERROR_INVALID_PARAMETER`。
    - `POSITION` 与 `PLAN` 早期的 PoC 结论（“只影响渲染进程的 DLL 加载”）不符：不处理时**一个页面也打不开**。
 5. `DraggedTabsContainer::OnTabDragEnded` 与 `DraggedTabsContainer::OnTabDragExited` 在 156 中共用同一地址（ICF），不能作为挂钩点；`tabs::TabModel::GetContents` 也与 `v8::internal::LargeObjectSpace::Size` 折叠，但它只被调用、不被挂钩，属于正常现象。resolver 现在只对 `hook: true` 的函数做同址检查。
+6. **静态存储期的 `std::thread` 会让 DLL 卸载时 abort**（0xC0000409，fault 落在 `VERSION!abort`）：代理 DLL 被卸载时 CRT 会运行 atexit 析构器，`std::thread` 仍 joinable → `std::terminate` → `abort`。WebSocket 的 accept 线程必须 `detach()`。
+7. **布局刷新不能同步调 `LayoutManagerBase::Layout`**：在消息回调里同步跑布局会重入并进入重布局风暴。正确做法是 `InvalidateLayout(host_view)` + `InvalidateManager(layout)` + `SchedulePaint(host_view)`，让 Chrome 自己的帧跑一次布局。
+   - `CalculateProposedLayout` 的 `this` 是 **LayoutManagerBase，不是 view**；要刷新的容器 view 在 `views::LayoutManagerBase::host_view_`（156：`+0x38`）。拿错指针调 `InvalidateLayout` 会直接搞崩浏览器。
+   - 记录过的 host view 随时可能被销毁，所以刷新前要校验 vtable、设 TTL（60s），并用 `__try/__except` 包住每次调用（SEH 不能和需要 C++ 对象展开的函数混用，必须拆成独立函数）。
+8. **`chrome.tabs.onCreated` 的 payload 不含 `openerTabId`**（156 实测，虽然文档列出该字段）。扩展必须 `chrome.tabs.get(tab.id)` 再读一次才能拿到 opener。
+9. **窗口的最后一个标签关掉后 Chrome 正常退出（exit code 0）**，测试脚本要留一个无关标签，否则会把“关完子树后浏览器消失”误判为崩溃。
 
 ### 13.5 Chrome 156.0.8078.80 实测数据（PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`）
 
