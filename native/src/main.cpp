@@ -13,20 +13,19 @@ namespace {
 constexpr const char* kModuleVersion = "0.1.0";
 constexpr const wchar_t* kChromeDllName = L"chrome.dll";
 
-HMODULE g_chrome_dll = nullptr;
-void* g_dll_notification = nullptr;
+// The DLL notification callback runs while the loader lock is held: it must not log, allocate
+// threads or touch the filesystem. It only records the base address and wakes the worker.
+HANDLE g_chrome_loaded_event = nullptr;
+PVOID volatile g_chrome_base = nullptr;
 
-// Loader notification callbacks must return quickly: heavy work goes to a worker thread,
-// while the detours we need before any child process is spawned were already installed from
-// DllMain.
 struct ModuleName {
   USHORT length;
   USHORT maximum_length;
   const wchar_t* buffer;
 };
 
-// Mirrors LDR_DLL_LOADED_NOTIFICATION_DATA (winternl.h is not includable here without
-// dragging in conflicting ntdll declarations).
+// Mirrors LDR_DLL_LOADED_NOTIFICATION_DATA without pulling in winternl.h, whose declarations
+// clash with the ones this translation unit already gets from <windows.h>.
 struct DllLoadedData {
   ULONG flags;
   const ModuleName* full_name;
@@ -44,31 +43,53 @@ void OnOffsetsResolved(bool ok, const arbortab::Offsets& offsets, const char* er
     return;
   }
   ARB_INFO("offsets ready (source=%s, chrome=%s, hooks=%zu)", offsets.source.c_str(),
-                     offsets.chrome_version.c_str(), offsets.hooks.size());
+           offsets.chrome_version.c_str(), offsets.hooks.size());
   const arbortab::FeatureState features =
-      arbortab::InstallFeatureHooks(g_chrome_dll, offsets);
+      arbortab::InstallFeatureHooks(static_cast<HMODULE>(g_chrome_base), offsets);
   ARB_INFO("features: %s", arbortab::DescribeFeatures(features).c_str());
   if (!features.layout) {
     ARB_WARN("no feature could be enabled; Chrome keeps its native tab strip");
   }
 }
 
-void StartPipeline(HMODULE chrome_dll) {
-  g_chrome_dll = chrome_dll;
-  arbortab::StartOffsetsResolution(chrome_dll, &OnOffsetsResolved);
-}
-
 void CALLBACK OnDllNotification(ULONG reason, const DllLoadedData* data, PVOID) {
   constexpr ULONG kLoaded = 1;  // LDR_DLL_NOTIFICATION_REASON_LOADED
-  if (reason != kLoaded || !data || !data->base_name) {
+  if (reason != kLoaded || !data || !data->base_name || g_chrome_base) {
     return;
   }
   if (data->base_name->length != wcslen(kChromeDllName) * sizeof(wchar_t) ||
       _wcsnicmp(data->base_name->buffer, kChromeDllName, wcslen(kChromeDllName)) != 0) {
     return;
   }
-  ARB_INFO("chrome.dll mapped at %p", data->base);
-  StartPipeline(static_cast<HMODULE>(data->base));
+  g_chrome_base = data->base;
+  if (g_chrome_loaded_event) {
+    SetEvent(g_chrome_loaded_event);
+  }
+}
+
+// Waits for chrome.dll and then starts the offsets pipeline. Runs outside the loader lock.
+DWORD WINAPI PipelineThread(LPVOID) {
+  const HANDLE waits[] = {g_chrome_loaded_event};
+  for (;;) {
+    const DWORD result = WaitForMultipleObjects(1, waits, FALSE, 60000);
+    if (result == WAIT_OBJECT_0) {
+      HMODULE chrome = static_cast<HMODULE>(g_chrome_base);
+      if (!chrome) {
+        continue;
+      }
+      ARB_INFO("chrome.dll mapped at %p", chrome);
+      arbortab::StartOffsetsResolution(chrome, &OnOffsetsResolved);
+      return 0;
+    }
+    // Periodically check GetModuleHandle: the notification only fires while our hook is
+    // registered, but chrome.dll may already be mapped before this thread starts.
+    if (HMODULE chrome = GetModuleHandleW(kChromeDllName)) {
+      g_chrome_base = chrome;
+      ARB_INFO("chrome.dll already mapped at %p", chrome);
+      arbortab::StartOffsetsResolution(chrome, &OnOffsetsResolved);
+      return 0;
+    }
+  }
 }
 
 DWORD WINAPI InitThread(LPVOID) {
@@ -81,14 +102,15 @@ DWORD WINAPI InitThread(LPVOID) {
   } else if (level == "error") {
     arbortab::LogSetLevel(arbortab::LogLevel::kError);
   }
-  ARB_INFO("ArborTab native %s attached to browser process %lu (log=%ls)",
-                     kModuleVersion, GetCurrentProcessId(), arbortab::LogPath().c_str());
+  ARB_INFO("ArborTab native %s attached to browser process %lu (log=%ls)", kModuleVersion,
+           GetCurrentProcessId(), arbortab::LogPath().c_str());
 
-  // chrome.dll may already be mapped if the notification arrived before this thread ran.
-  HMODULE chrome = GetModuleHandleW(kChromeDllName);
-  if (chrome && !g_chrome_dll) {
-    ARB_INFO("chrome.dll already mapped at %p", chrome);
-    StartPipeline(chrome);
+  // chrome.dll loading is reported on another thread, so swap in the real pipeline thread
+  // once the event object exists and re-check whether the module is already mapped.
+  if (HANDLE thread = CreateThread(nullptr, 0, &PipelineThread, nullptr, 0, nullptr)) {
+    CloseHandle(thread);
+  } else {
+    ARB_ERROR("cannot start the pipeline thread: %lu", GetLastError());
   }
   return 0;
 }
@@ -113,19 +135,21 @@ BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
   // STATUS_INVALID_IMAGE_HASH because our unsigned version.dll sits next to chrome.exe.
   arbortab::InstallCigBypass();
 
+  g_chrome_loaded_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+
   auto* ntdll = GetModuleHandleW(L"ntdll.dll");
   auto register_notification = reinterpret_cast<LdrRegisterDllNotificationFn>(
       ntdll ? GetProcAddress(ntdll, "LdrRegisterDllNotification") : nullptr);
-  if (register_notification) {
-    const LONG status =
-        register_notification(0, &OnDllNotification, nullptr, &g_dll_notification);
+  if (!register_notification) {
+    arbortab::LogInit(arbortab::LogLevel::kInfo);
+    ARB_ERROR("LdrRegisterDllNotification is unavailable");
+  } else {
+    PVOID cookie = nullptr;
+    const LONG status = register_notification(0, &OnDllNotification, nullptr, &cookie);
     if (status != 0) {
       arbortab::LogInit(arbortab::LogLevel::kInfo);
       ARB_ERROR("LdrRegisterDllNotification failed: 0x%08lx", status);
     }
-  } else {
-    arbortab::LogInit(arbortab::LogLevel::kInfo);
-    ARB_ERROR("LdrRegisterDllNotification is unavailable");
   }
 
   if (HANDLE thread = CreateThread(nullptr, 0, &InitThread, nullptr, 0, nullptr)) {

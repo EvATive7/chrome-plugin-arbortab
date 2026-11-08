@@ -39,6 +39,15 @@ std::vector<uint8_t> HexBytes(const std::string& text) {
   return bytes;
 }
 
+std::string JsonString(const nlohmann::json& node) {
+  return node.is_string() ? node.get<std::string>() : std::string();
+}
+
+std::string JsonField(const nlohmann::json& node, const char* key) {
+  const auto found = node.find(key);
+  return found != node.end() && found->is_string() ? found->get<std::string>() : std::string();
+}
+
 uint32_t ParseHex(const std::string& text, uint32_t fallback = 0) {
   if (text.empty()) {
     return fallback;
@@ -55,13 +64,13 @@ bool ParseFunction(const nlohmann::json& node, FunctionEntry& entry, std::string
     error = "function entry without rva";
     return false;
   }
-  entry.rva = ParseHex(node["rva"].get<std::string>());
+  entry.rva = ParseHex(JsonString(node["rva"]));
   if (entry.rva == 0) {
     error = "function entry with unparsable rva";
     return false;
   }
   if (node.contains("prologue")) {
-    entry.prologue = HexBytes(node["prologue"].get<std::string>());
+    entry.prologue = HexBytes(JsonString(node["prologue"]));
   }
   return true;
 }
@@ -165,6 +174,7 @@ std::string ChromeVersionFromModule(HMODULE chrome_dll) {
 }
 
 bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& error) {
+  try {
   std::string text;
   if (!ReadWholeFile(path, text)) {
     error = "offsets file is missing";
@@ -178,52 +188,72 @@ bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& er
     return false;
   }
 
-  Offsets parsed;
-  parsed.schema = root.value("schema", 0);
-  parsed.chrome_version = root.value("chromeVersion", std::string());
-  parsed.pdb_key = root.value("pdbKey", std::string());
-  parsed.pdb_name = root.value("pdbName", std::string());
+  if (!root.is_object()) {
+    error = "offsets JSON is not an object";
+    return false;
+  }
 
-  if (root.contains("functions")) {
-    for (const auto& [name, node] : root["functions"].items()) {
+  Offsets parsed;
+  const auto number = [&root](const char* key) -> int {
+    const auto found = root.find(key);
+    return found != root.end() && found->is_number() ? found->get<int>() : 0;
+  };
+  parsed.schema = number("schema");
+  parsed.chrome_version = JsonField(root, "chromeVersion");
+  parsed.pdb_key = JsonField(root, "pdbKey");
+  parsed.pdb_name = JsonField(root, "pdbName");
+
+  const auto object = [&root](const char* key) -> nlohmann::json {
+    const auto found = root.find(key);
+    return found != root.end() && found->is_object() ? *found : nlohmann::json::object();
+  };
+
+  // Every section lives in a named local: nlohmann's items() proxy must not outlive the
+  // container it iterates.
+  const nlohmann::json functions = object("functions");
+  const nlohmann::json hooks = object("hooks");
+  const nlohmann::json vtables = object("vtables");
+  const nlohmann::json vtable_slots = object("vtableSlots");
+  const nlohmann::json fields = object("fields");
+  const nlohmann::json sizes = object("sizes");
+
+  for (const auto& [name, node] : functions.items()) {
       FunctionEntry entry;
       std::string entry_error;
       if (!ParseFunction(node, entry, entry_error)) {
         error = name + ": " + entry_error;
         return false;
       }
-      parsed.functions[name] = entry;
-    }
+    parsed.functions[name] = entry;
   }
-  if (root.contains("hooks")) {
-    for (const auto& [name, node] : root["hooks"].items()) {
-      auto found = parsed.functions.find(name);
-      if (found == parsed.functions.end()) {
-        error = "hook listed without a function entry: " + name;
-        return false;
-      }
-      parsed.hooks[name] = found->second;
+
+  for (const auto& [name, node] : hooks.items()) {
+    const auto found = parsed.functions.find(name);
+    if (found == parsed.functions.end()) {
+      error = "hook listed without a function entry: " + name;
+      return false;
     }
+    parsed.hooks[name] = found->second;
   }
-  if (root.contains("vtables")) {
-    for (const auto& [name, node] : root["vtables"].items()) {
-      std::vector<uint32_t> addresses;
+
+  for (const auto& [name, node] : vtables.items()) {
+    std::vector<uint32_t> addresses;
+    if (node.is_array()) {
       for (const auto& value : node) {
-        addresses.push_back(ParseHex(value.get<std::string>()));
+        addresses.push_back(ParseHex(JsonString(value)));
       }
-      parsed.vtables[name] = std::move(addresses);
     }
+    parsed.vtables[name] = std::move(addresses);
   }
-  if (root.contains("vtableSlots")) {
-    for (const auto& [name, node] : root["vtableSlots"].items()) {
-      parsed.vtable_slots[name] = node.get<int>();
-    }
+
+  for (const auto& [name, node] : vtable_slots.items()) {
+    parsed.vtable_slots[name] = node.is_number() ? node.get<int>() : 0;
   }
-  for (const auto& [name, node] : root.value("fields", nlohmann::json::object()).items()) {
-    parsed.fields[name] = ParseHex(node.get<std::string>());
+  for (const auto& [name, node] : fields.items()) {
+    parsed.fields[name] = ParseHex(JsonString(node));
   }
-  for (const auto& [name, node] : root.value("sizes", nlohmann::json::object()).items()) {
-    parsed.sizes[name] = ParseHex(node.get<std::string>());
+  for (const auto& [name, node] : sizes.items()) {
+    parsed.sizes[name] = ParseHex(JsonString(node));
   }
 
   if (parsed.functions.empty()) {
@@ -233,6 +263,13 @@ bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& er
   parsed.loaded = true;
   out = std::move(parsed);
   return true;
+  } catch (const std::exception& exception) {
+    error = std::string("offsets table is malformed: ") + exception.what();
+    return false;
+  } catch (...) {
+    error = "offsets table is malformed";
+    return false;
+  }
 }
 
 int HttpGet(const std::wstring& url, std::string& body) {
@@ -309,6 +346,7 @@ void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback callback
 
   auto* base = reinterpret_cast<HMODULE>(chrome_dll);
   std::thread([key, version, callback, base] {
+   try {
     for (;;) {
       Offsets offsets;
       std::string error;
@@ -320,7 +358,12 @@ void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback callback
         return;
       }
 
-      ARB_WARN("offsets not cached (%s); downloading for key %s", error.c_str(), key.c_str());
+      ARB_WARN("offsets not cached (%s)", error.c_str());
+      if (ReadConfigInt("disableDownload", 0) != 0) {
+        ARB_WARN("downloads are disabled by config.ini (disableDownload=1); features stay off");
+        return;
+      }
+      ARB_WARN("downloading offsets for key %s", key.c_str());
       const std::wstring wide_key(key.begin(), key.end());
       std::vector<std::wstring> urls = {
           std::wstring(kOffsetsUrlPrefix) + wide_key + L".json",
@@ -360,6 +403,12 @@ void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback callback
                kRetryMinutes);
       std::this_thread::sleep_for(std::chrono::minutes(kRetryMinutes));
     }
+   } catch (const std::exception& exception) {
+     // Never let an exception escape: this thread lives inside the browser process.
+     ARB_ERROR("offsets worker failed: %s", exception.what());
+   } catch (...) {
+     ARB_ERROR("offsets worker failed with an unknown exception");
+   }
   }).detach();
 }
 
