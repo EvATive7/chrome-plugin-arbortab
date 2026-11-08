@@ -2,20 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title data-i18n="settingsTitle">ArborTab settings</title>
     <style>
       :root {
         color-scheme: light dark;
         --surface: light-dark(#ffffff, #292a2d);
-        --page: light-dark(#f8f9fa, #202124);
+        --page: light-dark(#f6f8fc, #1f1f1f);
+        --strip: light-dark(#e9eef6, #1b1b1c);
         --text: light-dark(#1f1f1f, #e3e3e3);
         --subtle: light-dark(#5f6368, #9aa0a6);
-        --line: light-dark(#e1e3e1, #3c4043);
+        --line: light-dark(#e3e6ea, #3c4043);
+        --outline: light-dark(#747775, #8e918f);
         --accent: light-dark(#0b57d0, #a8c7fa);
-        --guide: color-mix(in srgb, var(--text) 16%, transparent);
+        --on-accent: light-dark(#ffffff, #062e6f);
+        --ok: light-dark(#146c2e, #6dd58c);
+        --bad: light-dark(#b3261e, #f2b8b5);
         --indent: 14px;
         font-family: system-ui, "Segoe UI", sans-serif;
         font-size: 14px;
+        line-height: 1.4;
       }
       body {
         margin: 0;
@@ -23,184 +29,358 @@
         color: var(--text);
       }
       main {
-        max-width: 680px;
+        max-width: 720px;
         margin: 0 auto;
-        padding: 32px 20px 48px;
-      }
-      header {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 16px;
-        margin-bottom: 20px;
+        padding: 36px 24px 56px;
       }
       h1 {
-        font-size: 22px;
-        font-weight: 500;
-        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 24px;
+        font-weight: 600;
+        margin: 0 0 4px;
       }
       h2 {
-        font-size: 14px;
-        font-weight: 500;
-        color: var(--subtle);
-        margin: 28px 0 8px 4px;
-      }
-      .status {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 13px;
-        color: var(--subtle);
-      }
-      .status::before {
-        content: "";
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        background: var(--subtle);
-      }
-      .status.ok::before {
-        background: #1e8e3e;
-      }
-      .status.bad::before {
-        background: #d93025;
+        font-size: 16px;
+        font-weight: 600;
+        margin: 32px 0 12px 4px;
       }
       .card {
         background: var(--surface);
-        border-radius: 12px;
-        box-shadow: 0 1px 2px color-mix(in srgb, #000 12%, transparent);
+        border-radius: 14px;
+        box-shadow:
+          0 0 0 1px color-mix(in srgb, var(--line) 60%, transparent),
+          0 1px 3px color-mix(in srgb, #000 8%, transparent);
         overflow: hidden;
       }
+
+      /* Rows: label column on the left, one control on the right. */
       .row {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 24px;
-        min-height: 56px;
-        padding: 8px 20px;
+        gap: 32px;
+        min-height: 64px;
+        padding: 12px 20px;
+        box-sizing: border-box;
       }
-      .row + .row {
+      .row + .row,
+      .preview + .row {
         border-top: 1px solid var(--line);
       }
-      .row .label {
+      .label {
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 3px;
+        min-width: 0;
       }
-      .row .hint {
+      .label > :first-child {
+        font-weight: 500;
+      }
+      .hint {
         color: var(--subtle);
         font-size: 12.5px;
       }
-      .detail {
-        color: var(--subtle);
-        font-size: 12.5px;
-        padding: 0 20px 14px;
-        margin-top: -6px;
-      }
-      /* Switch */
-      .switch {
-        position: relative;
+      .control {
         flex: none;
-        width: 36px;
-        height: 20px;
-      }
-      .switch input {
-        appearance: none;
-        margin: 0;
-        width: 100%;
-        height: 100%;
-        border-radius: 10px;
-        background: color-mix(in srgb, var(--subtle) 45%, transparent);
-        cursor: pointer;
-        transition: background 160ms ease;
-      }
-      .switch input:checked {
-        background: var(--accent);
-      }
-      .switch::after {
-        content: "";
-        position: absolute;
-        top: 3px;
-        left: 3px;
-        width: 14px;
-        height: 14px;
-        border-radius: 50%;
-        background: #fff;
-        pointer-events: none;
-        transition: transform 160ms cubic-bezier(0.2, 0, 0, 1);
-      }
-      .switch:has(input:checked)::after {
-        transform: translateX(16px);
-      }
-      /* Indent slider */
-      .range {
         display: flex;
         align-items: center;
         gap: 12px;
       }
-      .range input {
-        width: 160px;
-        accent-color: var(--accent);
+
+      /* Native module status */
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        height: 28px;
+        padding: 0 12px;
+        border-radius: 14px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--subtle);
+        background: color-mix(in srgb, var(--subtle) 12%, transparent);
       }
-      .range output {
-        min-width: 38px;
-        text-align: right;
+      .pill::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .pill.ok {
+        color: var(--ok);
+        background: color-mix(in srgb, var(--ok) 14%, transparent);
+      }
+      .pill.bad {
+        color: var(--bad);
+        background: color-mix(in srgb, var(--bad) 14%, transparent);
+      }
+      .value {
         color: var(--subtle);
         font-variant-numeric: tabular-nums;
       }
-      input[type="number"] {
-        width: 64px;
-        padding: 6px 8px;
-        border-radius: 6px;
-        border: 1px solid var(--line);
-        background: transparent;
-        color: inherit;
-        font: inherit;
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 6px;
       }
-      input[type="color"] {
-        width: 32px;
-        height: 32px;
-        padding: 0;
-        border: none;
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 26px;
+        padding: 0 10px;
         border-radius: 8px;
-        background: none;
+        font-size: 12.5px;
+        border: 1px solid var(--line);
+        color: var(--text);
+      }
+      .chip svg {
+        width: 14px;
+        height: 14px;
+        flex: none;
+      }
+      .chip.on svg {
+        color: var(--ok);
+      }
+      .chip.off {
+        color: var(--subtle);
+        border-style: dashed;
+      }
+      [hidden] {
+        display: none !important;
+      }
+
+      /* Switch (Material 3 proportions) */
+      .switch {
+        appearance: none;
+        position: relative;
+        flex: none;
+        width: 52px;
+        height: 32px;
+        margin: 0;
+        border-radius: 16px;
+        box-sizing: border-box;
+        border: 2px solid var(--outline);
+        background: color-mix(in srgb, var(--outline) 14%, transparent);
+        cursor: pointer;
+        transition:
+          background 160ms ease,
+          border-color 160ms ease;
+      }
+      .switch::before {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 6px;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: var(--outline);
+        transform: translateY(-50%);
+        transition:
+          left 160ms cubic-bezier(0.2, 0, 0, 1),
+          width 160ms cubic-bezier(0.2, 0, 0, 1),
+          height 160ms cubic-bezier(0.2, 0, 0, 1),
+          background 160ms ease;
+      }
+      .switch:checked {
+        border-color: var(--accent);
+        background: var(--accent);
+      }
+      .switch:checked::before {
+        left: 22px;
+        width: 24px;
+        height: 24px;
+        background: var(--on-accent);
+      }
+
+      /* Slider with a filled track */
+      .slider {
+        appearance: none;
+        width: 180px;
+        height: 20px;
+        margin: 0;
+        background: transparent;
+        cursor: pointer;
+        --fill: 50%;
+      }
+      .slider::-webkit-slider-runnable-track {
+        height: 4px;
+        border-radius: 2px;
+        background: linear-gradient(
+          to right,
+          var(--accent) var(--fill),
+          color-mix(in srgb, var(--accent) 22%, transparent) var(--fill)
+        );
+      }
+      .slider::-webkit-slider-thumb {
+        appearance: none;
+        width: 18px;
+        height: 18px;
+        margin-top: -7px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 0%, transparent);
+        transition: box-shadow 120ms ease;
+      }
+      .slider:hover::-webkit-slider-thumb {
+        box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 16%, transparent);
+      }
+      .slider-value {
+        min-width: 44px;
+        text-align: right;
+      }
+
+      /* Segmented button */
+      .segmented {
+        display: inline-flex;
+        height: 32px;
+        border: 1px solid var(--outline);
+        border-radius: 16px;
+        overflow: hidden;
+      }
+      .segmented button {
+        appearance: none;
+        border: none;
+        margin: 0;
+        padding: 0 14px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--text);
+        background: transparent;
         cursor: pointer;
       }
-      input[type="color"]:disabled {
-        opacity: 0.35;
+      .segmented button + button {
+        border-left: 1px solid var(--outline);
+      }
+      .segmented button[aria-pressed="true"] {
+        background: color-mix(in srgb, var(--accent) 20%, transparent);
+      }
+
+      /* Colour swatch: a round well around the native picker. */
+      .swatch {
+        position: relative;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 18%, transparent);
+        background: var(--swatch, var(--accent));
+        overflow: hidden;
+      }
+      .swatch input {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        width: 100%;
+        height: 100%;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+      }
+
+      /* Number stepper */
+      .stepper {
+        display: inline-flex;
+        align-items: center;
+        height: 32px;
+        border: 1px solid var(--outline);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .stepper button {
+        appearance: none;
+        width: 32px;
+        height: 100%;
+        border: none;
+        margin: 0;
+        padding: 0;
+        font: inherit;
+        font-size: 16px;
+        color: var(--text);
+        background: transparent;
+        cursor: pointer;
+      }
+      .stepper button:hover:not(:disabled),
+      .segmented button:hover:not([aria-pressed="true"]) {
+        background: color-mix(in srgb, var(--text) 8%, transparent);
+      }
+      .stepper button:disabled {
+        color: color-mix(in srgb, var(--text) 30%, transparent);
         cursor: default;
       }
-      .accent-controls {
-        display: flex;
-        align-items: center;
-        gap: 14px;
+      .stepper input {
+        appearance: textfield;
+        width: 40px;
+        height: 100%;
+        border: none;
+        border-inline: 1px solid var(--line);
+        padding: 0;
+        text-align: center;
+        font: inherit;
+        font-variant-numeric: tabular-nums;
+        color: inherit;
+        background: transparent;
       }
-      /* Live preview of the strip */
+      .stepper input::-webkit-inner-spin-button {
+        appearance: none;
+      }
+
+      :is(.switch, .slider, .segmented button, .stepper button, .stepper input, .swatch input):focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .swatch:has(input:focus-visible) {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      /* Live preview: a small copy of the vertical tab strip, drawn with the native geometry
+         (guides in the indent gutter, count badge after the title, nest ring on the target). */
       .preview {
-        padding: 16px 20px 18px;
-        border-top: 1px solid var(--line);
+        display: flex;
+        justify-content: center;
+        padding: 20px;
+        background: color-mix(in srgb, var(--strip) 55%, var(--surface));
+      }
+      .strip {
+        position: relative;
+        width: 300px;
+        padding: 8px;
+        border-radius: 12px;
+        background: var(--strip);
+        box-shadow: 0 0 0 1px var(--line);
       }
       .tab {
         position: relative;
         display: flex;
         align-items: center;
         gap: 10px;
-        height: 30px;
-        margin: 2px 0;
+        height: 34px;
         padding: 0 10px;
-        border-radius: 8px;
         margin-left: calc(var(--depth) * var(--indent));
+        border-radius: 8px;
+        box-sizing: border-box;
         transition: margin-left 180ms cubic-bezier(0.2, 0, 0, 1);
       }
       .tab.active {
-        background: color-mix(in srgb, var(--text) 9%, transparent);
+        background: var(--surface);
+        box-shadow: 0 1px 2px color-mix(in srgb, #000 14%, transparent);
       }
-      .tab .icon {
+      .tab.drop {
+        background: color-mix(in srgb, var(--drop) 18%, transparent);
+        box-shadow: inset 0 0 0 1.5px var(--drop);
+      }
+      .tab .favicon {
         width: 16px;
         height: 16px;
-        border-radius: 4px;
-        background: color-mix(in srgb, var(--accent) 55%, transparent);
         flex: none;
+        border-radius: 50%;
+        background: var(--fav);
       }
       .tab .title {
         flex: 0 1 auto;
@@ -208,113 +388,140 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        font-size: 13px;
       }
       .tab .badge {
-        font-size: 11.5px;
-        min-width: 16px;
-        height: 16px;
-        padding: 0 6px;
-        border-radius: 8px;
+        flex: none;
+        min-width: 18px;
+        height: 18px;
+        padding: 0 7px;
+        box-sizing: border-box;
+        border-radius: 9px;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        color: var(--subtle);
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        color: color-mix(in srgb, var(--text) 85%, transparent);
         background: color-mix(in srgb, var(--text) 12%, transparent);
       }
-      .tab .guide {
+      .tab .close {
+        margin-left: auto;
+        width: 16px;
+        height: 16px;
+        flex: none;
+        color: var(--subtle);
+      }
+      .guide {
         position: absolute;
-        top: -1px;
-        bottom: -1px;
         width: 1px;
-        background: var(--guide);
+        background: color-mix(in srgb, var(--text) 14%, transparent);
+        pointer-events: none;
       }
-      .preview.no-guides .guide,
-      .preview.no-count .badge {
+      .guide.strong {
+        background: color-mix(in srgb, var(--text) 36%, transparent);
+      }
+      .strip.no-guides .guide,
+      .strip.no-count .badge {
         display: none;
-      }
-      .tab.drop {
-        box-shadow: inset 0 0 0 1.5px var(--drop);
-        background: color-mix(in srgb, var(--drop) 18%, transparent);
       }
     </style>
   </head>
   <body>
     <main>
-      <header>
-        <h1>ArborTab</h1>
-        <span id="native-status" class="status" data-i18n="checking">checking…</span>
-      </header>
+      <h1><img src="../../icons/logo.svg" alt="" width="36" height="36" />ArborTab</h1>
 
+      <h2 data-i18n="nativeModule">Native module</h2>
       <section class="card">
         <div class="row">
           <div class="label">
-            <span data-i18n="nativeModule">Native module</span>
+            <span data-i18n="nativeStatus">Status</span>
             <span id="native-detail" class="hint" data-i18n="askingBackground">Asking the background worker…</span>
           </div>
+          <span id="native-status" class="pill" data-i18n="checking">Checking…</span>
+        </div>
+        <div class="row" id="native-version-row" hidden>
+          <div class="label"><span data-i18n="nativeVersion">Version</span></div>
+          <span id="native-version" class="value"></span>
+        </div>
+        <div class="row" id="native-features-row" hidden>
+          <div class="label"><span data-i18n="nativeFeatures">Features</span></div>
+          <div id="native-features" class="chips"></div>
         </div>
       </section>
 
       <h2 data-i18n="appearance">Appearance</h2>
       <section class="card">
+        <div class="preview" aria-hidden="true">
+          <div id="preview" class="strip"></div>
+        </div>
         <div class="row">
           <div class="label">
-            <span data-i18n="indentPerLevel">Indent per level</span>
+            <span id="label-indentPerLevel" data-i18n="indentPerLevel">Indent per level</span>
             <span class="hint" data-i18n="indentHint">How far each child level is pushed in</span>
           </div>
-          <div class="range">
-            <input id="indent" type="range" min="8" max="32" step="1" />
-            <output id="indent-value"></output>
+          <div class="control">
+            <input id="indent" class="slider" aria-labelledby="label-indentPerLevel" type="range" min="8" max="32" step="1" />
+            <output id="indent-value" class="value slider-value"></output>
           </div>
         </div>
         <div class="row">
           <div class="label">
-            <span data-i18n="indentGuides">Indent guides</span>
+            <span id="label-indentGuides" data-i18n="indentGuides">Indent guides</span>
             <span class="hint" data-i18n="indentGuidesHint">Faint lines that connect children to their parent</span>
           </div>
-          <label class="switch"><input id="showGuides" type="checkbox" /></label>
+          <input id="showGuides" class="switch" aria-labelledby="label-indentGuides" type="checkbox" role="switch" />
         </div>
         <div class="row">
           <div class="label">
-            <span data-i18n="hiddenTabCount">Hidden-tab count</span>
+            <span id="label-hiddenTabCount" data-i18n="hiddenTabCount">Hidden-tab count</span>
             <span class="hint" data-i18n="hiddenTabCountHint">Badge after the title of a collapsed parent showing the number of tabs inside</span>
           </div>
-          <label class="switch"><input id="showCount" type="checkbox" /></label>
+          <input id="showCount" class="switch" aria-labelledby="label-hiddenTabCount" type="checkbox" role="switch" />
         </div>
         <div class="row">
           <div class="label">
-            <span data-i18n="animations">Animations</span>
+            <span id="label-animations" data-i18n="animations">Animations</span>
             <span class="hint" data-i18n="animationsHint">Glide on collapse, expand and re-parent (also off when Windows animations are off)</span>
           </div>
-          <label class="switch"><input id="animations" type="checkbox" /></label>
+          <input id="animations" class="switch" aria-labelledby="label-animations" type="checkbox" role="switch" />
         </div>
         <div class="row">
           <div class="label">
-            <span data-i18n="themeHighlight">Drop highlight follows the theme</span>
-            <span class="hint" data-i18n="themeHighlightHint">Otherwise use the colour on the right</span>
+            <span id="label-dropHighlight" data-i18n="dropHighlight">Drop highlight</span>
+            <span class="hint" data-i18n="dropHighlightHint">Ring and line that show where a dragged tab will land</span>
           </div>
-          <div class="accent-controls">
-            <input id="accentColor" type="color" title="Drop highlight colour" data-i18n-title="dropHighlightColour" />
-            <label class="switch"><input id="accentAuto" type="checkbox" /></label>
+          <div class="control">
+            <label class="swatch" id="accent-swatch" hidden>
+              <input id="accentColor" type="color" data-i18n-title="dropHighlightColour" title="Drop highlight colour" />
+            </label>
+            <div class="segmented" role="group" aria-labelledby="label-dropHighlight">
+              <button type="button" id="accentTheme" data-i18n="colourTheme">Theme</button>
+              <button type="button" id="accentCustom" data-i18n="colourCustom">Custom</button>
+            </div>
           </div>
         </div>
-        <div id="preview" class="preview" aria-hidden="true"></div>
       </section>
 
       <h2 data-i18n="behaviour">Behaviour</h2>
       <section class="card">
         <div class="row">
           <div class="label">
-            <span data-i18n="plusOpensChild">The + button opens a child tab</span>
+            <span id="label-plusOpensChild" data-i18n="plusOpensChild">The + button opens a child tab</span>
             <span class="hint" data-i18n="plusOpensChildHint">Off: new tabs always start a new tree</span>
           </div>
-          <label class="switch"><input id="newTabButtonIsChild" type="checkbox" /></label>
+          <input id="newTabButtonIsChild" class="switch" aria-labelledby="label-plusOpensChild" type="checkbox" role="switch" />
         </div>
         <div class="row">
           <div class="label">
-            <span data-i18n="askClosingTree">Ask before closing a tree</span>
+            <span id="label-askClosingTree" data-i18n="askClosingTree">Ask before closing a tree</span>
             <span class="hint" data-i18n="askClosingTreeHint">When closing a tab would close at least this many descendants (0 = never ask)</span>
           </div>
-          <input id="confirmThreshold" type="number" min="0" max="99" step="1" />
+          <div class="stepper">
+            <button type="button" id="confirmDown" aria-label="−">−</button>
+            <input id="confirmThreshold" aria-labelledby="label-askClosingTree" type="number" min="0" max="99" step="1" inputmode="numeric" />
+            <button type="button" id="confirmUp" aria-label="+">+</button>
+          </div>
         </div>
       </section>
     </main>

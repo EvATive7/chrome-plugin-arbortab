@@ -25,7 +25,8 @@ const fields = {
   showGuides: $('showGuides'),
   showCount: $('showCount'),
   animations: $('animations'),
-  accentAuto: $('accentAuto'),
+  accentTheme: $('accentTheme'),
+  accentCustom: $('accentCustom'),
   accentColor: $('accentColor'),
   newTabButtonIsChild: $('newTabButtonIsChild'),
   confirmThreshold: $('confirmThreshold'),
@@ -33,6 +34,8 @@ const fields = {
 
 let config = { ...DEFAULTS };
 let saveTimer = null;
+// Last custom colour, so Theme -> Custom brings back the user's previous pick.
+let customColor = null;
 
 function withDefaults(stored) {
   const merged = { ...DEFAULTS, ...(stored || {}) };
@@ -42,72 +45,131 @@ function withDefaults(stored) {
   return merged;
 }
 
+/** Any CSS colour (e.g. the computed theme accent) -> '#rrggbb'. */
+function toHex(cssColor) {
+  const probe = document.createElement('canvas').getContext('2d');
+  probe.fillStyle = FALLBACK_ACCENT;
+  probe.fillStyle = cssColor;
+  return probe.fillStyle.startsWith('#') ? probe.fillStyle : FALLBACK_ACCENT;
+}
+
 /** '#AARRGGBB' -> '#rrggbb' for <input type=color>. */
 function toCssColor(argb) {
   return /^#[0-9a-f]{8}$/i.test(argb) ? `#${argb.slice(3).toLowerCase()}` : FALLBACK_ACCENT;
 }
 
+/** The colour the native module uses when the highlight follows the theme. */
+function themeAccent() {
+  return getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+}
+
 function render() {
+  const min = Number(fields.indent.min);
+  const max = Number(fields.indent.max);
   fields.indent.value = config.indent;
+  fields.indent.style.setProperty('--fill', `${((config.indent - min) / (max - min)) * 100}%`);
   $('indent-value').textContent = msg('pixels', String(config.indent));
   fields.showGuides.checked = config.showGuides;
   fields.showCount.checked = config.showCount;
   fields.animations.checked = config.animations;
   const auto = config.highlightColor === 'auto';
-  fields.accentAuto.checked = auto;
-  fields.accentColor.disabled = auto;
+  fields.accentTheme.setAttribute('aria-pressed', String(auto));
+  fields.accentCustom.setAttribute('aria-pressed', String(!auto));
+  $('accent-swatch').hidden = auto;
   if (!auto) {
-    fields.accentColor.value = toCssColor(config.highlightColor);
+    customColor = toCssColor(config.highlightColor);
+    fields.accentColor.value = customColor;
+    $('accent-swatch').style.setProperty('--swatch', customColor);
   }
   fields.newTabButtonIsChild.checked = config.newTabButtonIsChild;
   fields.confirmThreshold.value = config.confirmThreshold;
+  $('confirmDown').disabled = config.confirmThreshold <= 0;
+  $('confirmUp').disabled = config.confirmThreshold >= 99;
   renderPreview();
 }
 
 const PREVIEW_TABS = [
-  { depth: 0, title: 'previewProjectNotes' },
-  { depth: 1, title: 'previewDesignReview', active: true },
-  { depth: 2, title: 'previewMockups' },
-  { depth: 1, title: 'previewIssueTracker', badge: 4 },
-  { depth: 0, title: 'previewInbox', drop: true },
+  { depth: 0, title: 'previewProjectNotes', favicon: '#e8710a' },
+  { depth: 1, title: 'previewDesignReview', favicon: '#a142f4', active: true },
+  { depth: 2, title: 'previewMockups', favicon: '#1e8e3e' },
+  { depth: 1, title: 'previewIssueTracker', favicon: '#d93025', badge: 4 },
+  { depth: 0, title: 'previewInbox', favicon: '#1a73e8', drop: true },
 ];
 
+const CLOSE_ICON =
+  '<svg class="close" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+  'stroke-linecap="round"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>';
+
 function renderPreview() {
-  const preview = $('preview');
-  preview.style.setProperty('--indent', `${config.indent}px`);
-  preview.style.setProperty(
+  const strip = $('preview');
+  strip.style.setProperty('--indent', `${config.indent}px`);
+  strip.style.setProperty(
     '--drop',
     config.highlightColor === 'auto' ? 'var(--accent)' : toCssColor(config.highlightColor),
   );
-  preview.classList.toggle('no-guides', !config.showGuides);
-  preview.classList.toggle('no-count', !config.showCount);
-  preview.replaceChildren(
-    ...PREVIEW_TABS.map((tab) => {
-      const row = document.createElement('div');
-      row.className = `tab${tab.active ? ' active' : ''}${tab.drop ? ' drop' : ''}`;
-      row.style.setProperty('--depth', tab.depth);
-      // Guides sit in the middle of each indent step to the left of the row.
-      for (let level = 0; level < tab.depth; level += 1) {
-        const guide = document.createElement('span');
-        guide.className = 'guide';
-        guide.style.left = `calc(${level - tab.depth} * var(--indent) + var(--indent) / 2)`;
-        row.append(guide);
+  strip.classList.toggle('no-guides', !config.showGuides);
+  strip.classList.toggle('no-count', !config.showCount);
+  const rows = PREVIEW_TABS.map((tab) => {
+    const row = document.createElement('div');
+    row.className = `tab${tab.active ? ' active' : ''}${tab.drop ? ' drop' : ''}`;
+    row.style.setProperty('--depth', tab.depth);
+    const favicon = document.createElement('span');
+    favicon.className = 'favicon';
+    favicon.style.setProperty('--fav', tab.favicon);
+    const title = document.createElement('span');
+    title.className = 'title';
+    title.textContent = msg(tab.title);
+    row.append(favicon, title);
+    if (tab.badge) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = tab.badge;
+      row.append(badge);
+    }
+    if (tab.active) {
+      row.insertAdjacentHTML('beforeend', CLOSE_ICON);
+    }
+    return row;
+  });
+  strip.replaceChildren(...rows);
+  placeGuides(strip);
+}
+
+/**
+ * Same rule as the native painter (decor.cpp, PaintGuides): one continuous line per indent
+ * column over each run of deeper rows, centred in that column of the indent gutter; the
+ * column holding the active tab's parent is drawn stronger. Positions are computed from the
+ * target geometry rather than measured, so the margin-left transition cannot skew them.
+ */
+function placeGuides(strip) {
+  const indent = config.indent;
+  const padding = parseFloat(getComputedStyle(strip).paddingLeft) || 0;
+  const rowHeight = strip.firstElementChild?.offsetHeight || 0;
+  const active = PREVIEW_TABS.findIndex((tab) => tab.active);
+  const activeLevel = active >= 0 ? PREVIEW_TABS[active].depth : 0;
+  const maxLevel = Math.max(...PREVIEW_TABS.map((tab) => tab.depth));
+  for (let column = 0; column < maxLevel; column += 1) {
+    let index = 0;
+    while (index < PREVIEW_TABS.length) {
+      if (PREVIEW_TABS[index].depth <= column) {
+        index += 1;
+        continue;
       }
-      const icon = document.createElement('span');
-      icon.className = 'icon';
-      const title = document.createElement('span');
-      title.className = 'title';
-      title.textContent = msg(tab.title);
-      row.append(icon, title);
-      if (tab.badge) {
-        const badge = document.createElement('span');
-        badge.className = 'badge';
-        badge.textContent = tab.badge;
-        row.append(badge);
+      const first = index;
+      while (index < PREVIEW_TABS.length && PREVIEW_TABS[index].depth > column) {
+        index += 1;
       }
-      return row;
-    }),
-  );
+      const top = padding + first * rowHeight + 3;
+      const bottom = padding + index * rowHeight - 3;
+      const guide = document.createElement('span');
+      const strong = active >= first && active < index && column === activeLevel - 1;
+      guide.className = `guide${strong ? ' strong' : ''}`;
+      guide.style.left = `${padding + column * indent + Math.floor(indent / 2)}px`;
+      guide.style.top = `${top}px`;
+      guide.style.height = `${bottom - top}px`;
+      strip.append(guide);
+    }
+  }
 }
 
 function save() {
@@ -125,45 +187,69 @@ fields.indent.addEventListener('input', () => update({ indent: Number(fields.ind
 for (const name of ['showGuides', 'showCount', 'animations', 'newTabButtonIsChild']) {
   fields[name].addEventListener('change', () => update({ [name]: fields[name].checked }));
 }
-fields.accentAuto.addEventListener('change', () =>
-  update({
-    highlightColor: fields.accentAuto.checked
-      ? 'auto'
-      : `#FF${fields.accentColor.value.slice(1).toUpperCase()}`,
-  }),
-);
+const toArgb = (css) => `#FF${css.slice(1).toUpperCase()}`;
+fields.accentTheme.addEventListener('click', () => update({ highlightColor: 'auto' }));
+fields.accentCustom.addEventListener('click', () => {
+  if (config.highlightColor === 'auto') {
+    update({ highlightColor: toArgb(customColor || toHex(themeAccent())) });
+  }
+});
 fields.accentColor.addEventListener('input', () =>
-  update({ highlightColor: `#FF${fields.accentColor.value.slice(1).toUpperCase()}` }),
-);
-fields.confirmThreshold.addEventListener('change', () =>
-  update({ confirmThreshold: Math.max(0, Number(fields.confirmThreshold.value) || 0) }),
+  update({ highlightColor: toArgb(fields.accentColor.value) }),
 );
 
-async function reportNativeStatus() {
+const clampThreshold = (value) => Math.min(99, Math.max(0, Math.round(Number(value) || 0)));
+fields.confirmThreshold.addEventListener('change', () =>
+  update({ confirmThreshold: clampThreshold(fields.confirmThreshold.value) }),
+);
+$('confirmDown').addEventListener('click', () =>
+  update({ confirmThreshold: clampThreshold(config.confirmThreshold - 1) }),
+);
+$('confirmUp').addEventListener('click', () =>
+  update({ confirmThreshold: clampThreshold(config.confirmThreshold + 1) }),
+);
+
+const CHECK_ICON =
+  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-7"/></svg>';
+const OFF_ICON =
+  '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
+  'stroke-linecap="round"><path d="M4 8h8"/></svg>';
+
+function setStatus(state, label, detail) {
   const status = $('native-status');
-  const detail = $('native-detail');
+  status.className = state ? `pill ${state}` : 'pill';
+  status.textContent = msg(label);
+  $('native-detail').textContent = msg(detail);
+}
+
+async function reportNativeStatus() {
+  let reply;
   try {
-    const reply = await chrome.runtime.sendMessage({ type: 'arbortab.status' });
-    if (reply?.connected) {
-      const features = Object.entries(reply.features || {})
-        .map(([name, enabled]) => {
-          const label = msg(`feature${name[0].toUpperCase()}${name.slice(1)}`);
-          return msg(enabled ? 'featureEnabled' : 'featureDisabled', label);
-        })
-        .join(' · ');
-      status.textContent = msg('connected');
-      status.className = 'status ok';
-      detail.textContent = msg('nativeDetail', [reply.nativeVersion || '?', features]);
-    } else {
-      status.textContent = msg('notConnected');
-      status.className = 'status bad';
-      detail.textContent = msg('nativeUnavailableDetail');
-    }
+    reply = await chrome.runtime.sendMessage({ type: 'arbortab.status' });
   } catch {
-    status.textContent = msg('unknown');
-    status.className = 'status';
-    detail.textContent = msg('backgroundNoAnswer');
+    setStatus('', 'unknown', 'backgroundNoAnswer');
+    return;
   }
+  const connected = Boolean(reply?.connected);
+  $('native-version-row').hidden = !connected;
+  $('native-features-row').hidden = !connected;
+  if (!connected) {
+    setStatus('bad', 'notConnected', 'nativeUnavailableDetail');
+    return;
+  }
+  setStatus('ok', 'connected', 'nativeConnectedDetail');
+  $('native-version').textContent = reply.nativeVersion || '?';
+  $('native-features').replaceChildren(
+    ...Object.entries(reply.features || {}).map(([name, enabled]) => {
+      const chip = document.createElement('span');
+      chip.className = `chip ${enabled ? 'on' : 'off'}`;
+      chip.title = msg(enabled ? 'featureOnTitle' : 'featureOffTitle');
+      chip.innerHTML = enabled ? CHECK_ICON : OFF_ICON;
+      chip.append(msg(`feature${name[0].toUpperCase()}${name.slice(1)}`));
+      return chip;
+    }),
+  );
 }
 
 async function load() {
