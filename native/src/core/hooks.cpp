@@ -40,7 +40,7 @@ FeatureState InstallFeatureHooks(HMODULE chrome_dll, const Offsets& offsets) {
     ARB_ERROR("MinHook is unavailable; every feature stays off");
     return features;
   }
-  // scripts/dev.py looks for this line to confirm which DLL is running.
+  // tools/dev/dev.py looks for this line to confirm which DLL is running.
   ARB_INFO("installing features (build %s)", kBuildStamp);
   ResolveChromeApi(chrome_dll, offsets, GlobalApi());
   InitPaint(chrome_dll, offsets);

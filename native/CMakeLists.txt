@@ -48,8 +48,8 @@ target_include_directories(version PRIVATE src third_party third_party/json)
 # version.dll itself is never linked: every forwarded call goes through GetProcAddress.
 target_link_libraries(version PRIVATE minhook winhttp shlwapi shell32)
 target_compile_definitions(version PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
-# Build time written to native.log (core/hooks.cpp), so scripts/dev.py can tell which DLL a
-# running browser loaded. Taken at configure time; scripts/build-native.ps1 reconfigures on
+# Build time written to native.log (core/hooks.cpp), so tools/dev/dev.py can tell which DLL a
+# running browser loaded. Taken at configure time; tools/dev/build-native.ps1 reconfigures on
 # every build.
 string(TIMESTAMP ARBORTAB_BUILD_STAMP "%m-%d %H:%M")
 set_source_files_properties(src/core/hooks.cpp PROPERTIES

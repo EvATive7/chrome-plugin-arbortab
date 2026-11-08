@@ -1,6 +1,6 @@
-# Builds native/version.dll with MSVC (PLAN.md section 8.2).
+# Builds native/version.dll with MSVC (VS 2022 Build Tools + cmake + Ninja).
 #
-#   pwsh -File scripts/build-native.ps1 [-Configuration Release] [-OutDir artifacts/native]
+#   pwsh -File tools/dev/build-native.ps1 [-Configuration Release] [-OutDir artifacts/native]
 param(
   [ValidateSet('Debug', 'Release')][string]$Configuration = 'Release',
   [string]$OutDir = 'artifacts/native',
@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $native = Join-Path $repo 'native'
 $build = Join-Path $repo ("build/native-" + $Configuration.ToLower())
 

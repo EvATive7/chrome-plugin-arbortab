@@ -1,4 +1,4 @@
-// F1: indent and hide tabs inside the native vertical tab strip (PLAN.md section 5.4).
+// F1: indent and hide tabs inside the native vertical tab strip.
 #pragma once
 
 #include <windows.h>

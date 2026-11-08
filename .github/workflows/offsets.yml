@@ -28,7 +28,7 @@ jobs:
       - name: Query stable Chrome
         id: chrome
         shell: pwsh
-        run: uv run python scripts/query-chrome.py --github-output $env:GITHUB_OUTPUT
+        run: uv run python tools/ci/query-chrome.py --github-output $env:GITHUB_OUTPUT
 
       - name: Check whether version is already resolved
         id: existing
@@ -55,14 +55,14 @@ jobs:
           curl.exe -L --fail --retry 5 --output D:\arbortab\chrome-installer.exe '${{ steps.chrome.outputs.url }}'
           $actual = (Get-FileHash D:\arbortab\chrome-installer.exe -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne '${{ steps.chrome.outputs.sha256 }}') { throw "Installer hash mismatch: $actual" }
-          ./scripts/extract-chrome.ps1 -Installer D:\arbortab\chrome-installer.exe -Output D:\arbortab\extracted -Version '${{ steps.chrome.outputs.version }}'
+          ./tools/ci/extract-chrome.ps1 -Installer D:\arbortab\chrome-installer.exe -Output D:\arbortab\extracted -Version '${{ steps.chrome.outputs.version }}'
 
       - name: Read PDB key
         if: steps.existing.outputs.exists != 'true'
         id: pdb
         shell: pwsh
         run: |
-          $line = uv run --with pefile python -I research/tools/pdbinfo.py D:\arbortab\extracted\chrome.dll
+          $line = uv run --with pefile python -I tools/re/pdbinfo.py D:\arbortab\extracted\chrome.dll
           $key = ($line -split ' ')[-1].Trim()
           "key=$key" >> $env:GITHUB_OUTPUT
           Write-Host "PDB key: $key"

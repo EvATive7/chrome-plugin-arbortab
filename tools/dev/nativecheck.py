@@ -1,8 +1,8 @@
 """Drive the ArborTab native endpoint directly (no extension needed).
 
 Used for milestone verification in the sandbox Chrome:
-    uv run --with websocket-client python scripts/nativecheck.py --depths 0,1,1 --collapsed 0
-    uv run --with websocket-client python scripts/nativecheck.py --layout
+    uv run --with websocket-client python tools/dev/nativecheck.py --depths 0,1,1 --collapsed 0
+    uv run --with websocket-client python tools/dev/nativecheck.py --layout
 """
 from __future__ import annotations
 

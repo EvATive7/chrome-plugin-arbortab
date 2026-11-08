@@ -1,5 +1,5 @@
 // UI-thread bridge: the WebSocket thread cannot touch views, so it posts a message to a
-// message-only window that lives on the browser UI thread (PLAN.md section 5.5).
+// message-only window that lives on the browser UI thread.
 #pragma once
 
 #include <windows.h>

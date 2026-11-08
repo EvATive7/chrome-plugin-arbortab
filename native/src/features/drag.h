@@ -1,5 +1,5 @@
 // F4/F5/F6: drag a tab onto another tab to re-parent it, or onto an edge to reorder it among
-// its siblings (PLAN.md §5.4). The native strip reorder is suppressed while dragging.
+// its siblings. The native strip reorder is suppressed while dragging.
 #pragma once
 
 #include <windows.h>

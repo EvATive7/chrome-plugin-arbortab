@@ -1,5 +1,5 @@
 // ArborTab service worker: keeps the tree model in sync with chrome.tabs and pushes the
-// display state to the native module (PLAN.md sections 4.2/4.3).
+// display state to the native module.
 
 import * as tree from './tree.js';
 import { NativeLink } from './native-link.js';
@@ -23,7 +23,7 @@ const SESSION_KEY = 'arbortab.windows';
 let windows = new Map();
 let config = { ...DEFAULT_CONFIG };
 let dragActive = false;
-/** Tab that was collapsed only for the duration of a drag (PLAN.md §3: drag a parent alone). */
+/** Tab that was collapsed only for the duration of a drag (a parent is dragged alone). */
 let dragTemporarilyCollapsed = null;
 /** Window of the current drag: its strip order is re-asserted when the drag ends. */
 let dragWindowId = null;
@@ -219,7 +219,7 @@ async function sendState() {
 async function onCreated(createdTab) {
   await ensureInit();
   // Chrome 156 does not include openerTabId in the onCreated payload, so the tab is re-read;
-  // the opener is what decides whether this tab joins the tree (PLAN.md section 3).
+  // the opener is what decides whether this tab joins the tree.
   const tab = (await chrome.tabs.get(createdTab.id).catch(() => null)) || createdTab;
   if (!tab.windowId) {
     return;
@@ -267,7 +267,7 @@ async function onRemoved(tabId, removeInfo) {
     return;
   }
   const state = stateFor(removeInfo.windowId);
-  // Closing a tab closes its whole subtree (PLAN.md section 3).
+  // Closing a tab closes its whole subtree.
   const descendants = tree.descendantsOf(state, tabId);
   tree.detachSubtree(state, tabId);
   bumpState();
@@ -317,7 +317,7 @@ async function onMoved(tabId, moveInfo) {
     return;
   }
   // Someone reordered tabs outside the drop protocol: keep every parent relation and
-  // re-derive the sibling order from the strip (PLAN.md section 4.3).
+  // re-derive the sibling order from the strip.
   const tabs = await chrome.tabs.query({ windowId: moveInfo.windowId });
   tabs.sort((a, b) => a.index - b.index);
   const changed = tree.adoptOrder(state, tabs.map((tab) => tab.id));
@@ -523,7 +523,7 @@ async function dropOnto(targetTabId, zone = 'nest', draggedTabId = null) {
     // Edge drop: a sibling reorder next to the target, under the target's parent.
     tree.insertSibling(state, dragged.id, targetTabId, zone);
   } else {
-    // Drop onto the tab: become the target's last child (PLAN.md section 3).
+    // Drop onto the tab: become the target's last child.
     tree.attachAsLastChild(state, dragged.id, targetTabId);
   }
   await applyOrder(target.windowId, state);

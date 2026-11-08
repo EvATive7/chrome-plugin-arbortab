@@ -1,4 +1,4 @@
-// F2 (click the favicon to collapse) and F3 (collapse marker) — PLAN.md section 5.4.
+// F2 (click the favicon to collapse) and F3 (collapse marker).
 #pragma once
 
 #include <windows.h>

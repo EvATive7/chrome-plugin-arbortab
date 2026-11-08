@@ -1,4 +1,4 @@
-// Unit tests for the pure ordered-tree model: node --test extension/test
+// Unit tests for the pure ordered-tree model: node --test extension/test/tree.test.mjs
 //
 // The model stores only relations: an ordered root list plus an ordered child list per node.
 // The strip order is always the pre-order walk, never stored.

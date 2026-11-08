@@ -5,7 +5,7 @@
 // chrome.exe, every child process creation would fail with STATUS_INVALID_IMAGE_HASH,
 // which leaves the browser unusable ("Aw, Snap!" on every tab). The browser process is the
 // parent of those children, so we neutralise exactly that one mitigation bit while the
-// attribute list is prepared (PLAN.md section 5.1).
+// attribute list is prepared.
 #pragma once
 
 namespace arbortab {

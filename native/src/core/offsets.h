@@ -1,4 +1,4 @@
-// Chrome version detection and offsets table handling (PLAN.md section 5.2 / 7).
+// Chrome version detection and offsets table handling.
 #pragma once
 
 #include <windows.h>

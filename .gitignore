@@ -4,7 +4,6 @@
 *.exp
 *.pdb
 *.ilk
-research/poc/version.dll
 
 # JavaScript / Python caches
 node_modules/

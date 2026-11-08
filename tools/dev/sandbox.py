@@ -1,13 +1,13 @@
-"""Sandbox Chrome harness for ArborTab development (PLAN.md section 10).
+"""Sandbox Chrome harness for ArborTab development.
 
 Never touches the real Chrome installation: everything runs from a copied
 portable Chrome tree.
 
 Examples:
-    uv run --with websocket-client --with psutil --with pillow python scripts/sandbox.py launch --fresh --tabs 3 --dll research/poc/version.dll
-    uv run --with pillow python scripts/sandbox.py shot artifacts/poc/with-hook.png
-    uv run --with websocket-client python scripts/sandbox.py new-tab https://example.com
-    uv run --with psutil python scripts/sandbox.py kill
+    uv run --with websocket-client --with psutil --with pillow python tools/dev/sandbox.py launch --fresh --tabs 3 --dll artifacts/native/version.dll
+    uv run --with pillow python tools/dev/sandbox.py shot artifacts/shot.png
+    uv run --with websocket-client python tools/dev/sandbox.py new-tab https://example.com
+    uv run --with psutil python tools/dev/sandbox.py kill
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 DEFAULT_SANDBOX = Path(r"C:\Users\evative7\Desktop\Playground\_test\portable")
 SANDBOX = Path(os.environ.get("ARBORTAB_SANDBOX", DEFAULT_SANDBOX))
 APP = SANDBOX / "app"

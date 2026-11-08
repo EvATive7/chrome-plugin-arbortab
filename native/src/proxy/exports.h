@@ -1,4 +1,4 @@
-// version.dll export forwarding (PLAN.md section 5.1).
+// version.dll export forwarding.
 //
 // chrome.exe statically imports VERSION.dll, so a proxy with the same name next to chrome.exe
 // is loaded into every Chrome process. We forward all 17 exports to the system DLL; the

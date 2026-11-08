@@ -1,5 +1,5 @@
-// Minimal WebSocket server (RFC 6455) used to talk to the ArborTab extension
-// (PLAN.md section 5.6): one text frame per message, no extensions, no compression.
+// Minimal WebSocket server (RFC 6455) used to talk to the ArborTab extension:
+// one text frame per message, no extensions, no compression.
 #pragma once
 
 #include <string>

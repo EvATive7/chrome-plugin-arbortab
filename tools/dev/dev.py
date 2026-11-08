@@ -1,10 +1,10 @@
 """One-shot dev loop for the sandbox Chrome: build -> stop -> install DLL -> start -> load the
 extension -> verify that the new build is the one running.
 
-    uv run --with websocket-client python scripts/dev.py            # rebuild DLL + restart
-    uv run --with websocket-client python scripts/dev.py --no-build # restart only
+    uv run --with websocket-client python tools/dev/dev.py            # rebuild DLL + restart
+    uv run --with websocket-client python tools/dev/dev.py --no-build # restart only
 
-(scripts/dev.ps1 wraps this.) Only the sandbox Chrome is touched, never the installed one.
+(tools/dev/dev.ps1 wraps this.) Only the sandbox Chrome is touched, never the installed one.
 Tabs come back through Chrome's own session restore.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import sandbox  # noqa: E402  (paths, kill(), install_dll(), wait_cdp())
 
-REPO = Path(__file__).resolve().parent.parent
+REPO = Path(__file__).resolve().parents[2]
 DLL = REPO / "artifacts" / "native" / "version.dll"
 EXTENSION = REPO / "extension"
 EXTENSION_ID = "egjpjafmlomkpnncliaigklbdbflface"
@@ -37,7 +37,7 @@ def step(text: str) -> None:
 
 def build() -> None:
     step("building native/version.dll")
-    result = subprocess.run(["pwsh", "-NoProfile", "-File", str(REPO / "scripts" / "build-native.ps1")],
+    result = subprocess.run(["pwsh", "-NoProfile", "-File", str(REPO / "tools" / "dev" / "build-native.ps1")],
                             cwd=REPO)
     if result.returncode != 0:
         raise SystemExit("build failed; the running Chrome was left alone")

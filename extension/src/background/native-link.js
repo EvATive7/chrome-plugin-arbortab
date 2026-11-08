@@ -1,4 +1,4 @@
-// WebSocket client for the ArborTab native module (PLAN.md section 4.4).
+// WebSocket client for the ArborTab native module.
 
 const PORTS = [47821, 47822, 47823, 47824, 47825];
 const PROTOCOL = 1;

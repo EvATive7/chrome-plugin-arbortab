@@ -1,4 +1,4 @@
-// MinHook runtime plus the feature hooks described in PLAN.md section 5.4.
+// MinHook runtime plus the feature hooks.
 #pragma once
 
 #include <windows.h>
