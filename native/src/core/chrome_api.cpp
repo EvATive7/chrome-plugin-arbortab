@@ -126,6 +126,8 @@ bool ResolveChromeApi(HMODULE chrome_dll, const Offsets& offsets, ChromeApi& api
   resolved.invalidate_layout = address("views::View::InvalidateLayout");
   resolved.schedule_paint = address("views::View::SchedulePaint");
   resolved.fill_rect = address("gfx::Canvas::FillRect");
+  resolved.draw_string_rect = address("gfx::Canvas::DrawStringRect");
+  resolved.default_font_list = address("views::Label::GetDefaultFontList");
   resolved.manager_layout = address("views::LayoutManagerBase::Layout");
   resolved.manager_invalidate = address("views::LayoutManagerBase::InvalidateLayout");
 

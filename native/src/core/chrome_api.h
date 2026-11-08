@@ -21,6 +21,8 @@ struct ChromeApi {
   void* invalidate_layout = nullptr;  // void (*)(void* view, bool invalidate_children)
   void* schedule_paint = nullptr;     // void (*)(void* view)
   void* fill_rect = nullptr;          // void (*)(void* canvas, const void* rect, uint32_t color)
+  void* draw_string_rect = nullptr;   // Canvas::DrawStringRect(u16string_view, FontList, SkColor, Rect)
+  void* default_font_list = nullptr;  // Label::GetDefaultFontList() -> const FontList&
   void* manager_layout = nullptr;     // void (*)(void* layout_manager, void* host_view)
   void* manager_invalidate = nullptr; // void (*)(void* layout_manager)
   int get_contents_slot = 3;

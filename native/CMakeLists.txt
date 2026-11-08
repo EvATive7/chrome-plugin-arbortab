@@ -34,6 +34,7 @@ set(ARBORTAB_SOURCES
   src/core/state.cpp
   src/core/ui_thread.cpp
   src/features/layout.cpp
+  src/features/mouse.cpp
   src/link/ws_server.cpp
   src/proxy/exports.cpp
 )

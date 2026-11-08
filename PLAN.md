@@ -497,6 +497,10 @@ nodes: Map<tabId, { parentId: number|null, collapsed: boolean }>
    - 记录过的 host view 随时可能被销毁，所以刷新前要校验 vtable、设 TTL（60s），并用 `__try/__except` 包住每次调用（SEH 不能和需要 C++ 对象展开的函数混用，必须拆成独立函数）。
 8. **`chrome.tabs.onCreated` 的 payload 不含 `openerTabId`**（156 实测，虽然文档列出该字段）。扩展必须 `chrome.tabs.get(tab.id)` 再读一次才能拿到 opener。
 9. **窗口的最后一个标签关掉后 Chrome 正常退出（exit code 0）**，测试脚本要留一个无关标签，否则会把“关完子树后浏览器消失”误判为崩溃。
+10. **消息专用窗口只能由 UI 线程创建**：`UiThreadEnsureWindow()` 若被偏移量解析线程（或任何非 UI 线程）先调用，窗口就挂在没有消息循环的线程上，之后所有 `PostMessage` 刷新都静默失效（表现为“缩进/折叠不生效”）。现在只从布局钩子里创建，并用原子标志防止并发创建。
+11. **`TabView::OnMousePressed` 的命中测试坐标**：`ui::LocatedEvent::location_` 已经是 TabView 局部坐标，`icon_->bounds_` 也是相对父视图的，两者不能相加（加了会整体偏移一个标签原点，永远点不中）。
+12. **F3 的 `+N` 用 `FillRect` 画七段数字**，不用 `DrawStringRect`/`FontList`：后者的 ABI（`std::u16string_view` 的寄存器传递、`FontList` 引用）在不同版本间容易变，出错时会被 SEH 静默吞掉。另外画在关闭按钮左侧（读 `TabView.close_button_` 的 bounds）。
+13. **自动化点击浏览器 UI 不可靠**：本机终端与沙盒窗口共享桌面，`PostMessage`/`SendInput` 都很难稳定命中标签栏。涉及标签栏坐标的验收（F2）需要人工点一次确认。
 
 ### 13.5 Chrome 156.0.8078.80 实测数据（PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`）
 

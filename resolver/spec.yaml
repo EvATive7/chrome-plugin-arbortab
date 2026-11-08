@@ -34,6 +34,9 @@ functions:
   views::LayoutManagerBase::InvalidateLayout:
     hook: false
     symbol: "?InvalidateLayout@LayoutManagerBase@views@@EEAAXXZ"
+  views::Label::GetDefaultFontList:
+    hook: false
+    symbol: "?GetDefaultFontList@Label@views@@SAAEBVFontList@gfx@@XZ"
   views::View::SchedulePaint:
     hook: false
     symbol: "?SchedulePaint@View@views@@QEAAXXZ"
@@ -71,6 +74,7 @@ fields:
   ui::Event.flags_: [ui::Event, flags_]
   ui::LocatedEvent.location_: [ui::LocatedEvent, location_]
   views::LayoutManagerBase.host_view_: [views::LayoutManagerBase, host_view_]
+  views::View.bounds_: [views::View, bounds_]
   views::ProposedLayout.host_size: [views::ProposedLayout, host_size]
   views::ProposedLayout.child_layouts: [views::ProposedLayout, child_layouts]
   views::ChildLayout.child_view: [views::ChildLayout, child_view]

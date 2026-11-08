@@ -1,5 +1,6 @@
 #include "core/ui_thread.h"
 
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -12,8 +13,9 @@ namespace {
 constexpr UINT kRefreshMessage = WM_APP + 0x41;
 constexpr size_t kMaxHostViews = 32;
 
-HWND g_window = nullptr;
+std::atomic<HWND> g_window{nullptr};
 DWORD g_ui_thread = 0;
+std::atomic<bool> g_creating{false};
 std::mutex g_mutex;
 // Views can be destroyed at any time (the strip is rebuilt on various Chrome events), and a
 // stale view pointer cannot be validated reliably. Entries are therefore kept fresh by the
@@ -97,8 +99,12 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 }  // namespace
 
 void UiThreadEnsureWindow() {
-  if (g_window) {
+  if (g_window.load()) {
     return;
+  }
+  bool expected = false;
+  if (!g_creating.compare_exchange_strong(expected, true)) {
+    return;  // another thread is already creating it
   }
   const DWORD current = GetCurrentThreadId();
   if (g_ui_thread && g_ui_thread != current) {
@@ -117,13 +123,15 @@ void UiThreadEnsureWindow() {
     }
     registered = true;
   }
-  g_window = CreateWindowExW(0, L"ArborTabUiThreadBridge", L"ArborTab", 0, 0, 0, 0, 0,
-                             HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
-  if (!g_window) {
+  HWND window = CreateWindowExW(0, L"ArborTabUiThreadBridge", L"ArborTab", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, nullptr, GetModuleHandleW(nullptr), nullptr);
+  if (!window) {
     ARB_WARN("message-only window creation failed: %lu", GetLastError());
+    g_creating = false;
     return;
   }
   g_ui_thread = current;
+  g_window = window;
   ARB_INFO("UI thread bridge ready (thread %lu)", current);
 }
 
@@ -160,10 +168,14 @@ void UiThreadRecordHostView(void* view, void* layout_manager) {
 }
 
 void UiThreadRequestRefresh() {
-  if (!g_window) {
+  const HWND window = g_window.load();
+  if (!window) {
+    ARB_DEBUG("refresh requested before the UI bridge exists");
     return;
   }
-  PostMessageW(g_window, kRefreshMessage, 0, 0);
+  if (!PostMessageW(window, kRefreshMessage, 0, 0)) {
+    ARB_WARN("PostMessage to the UI bridge failed: %lu", GetLastError());
+  }
 }
 
 long UiThreadRefreshCount() { return g_refresh_count; }
