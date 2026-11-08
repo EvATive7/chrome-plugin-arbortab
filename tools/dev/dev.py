@@ -123,12 +123,13 @@ def main() -> int:
     step("verifying")
     attached = wait_for_log(log_start, r"attached to browser process", 15)
     loaded = wait_for_log(log_start, r"\(build " + re.escape(stamp) + r"\)", 15)
-    features = wait_for_log(log_start, r"features: ", 15)
+    # Features only appear once offsets for this Chrome build are loaded.
+    offsets = wait_for_log(log_start, r"features: |no usable offsets|downloads are disabled|offsets are unavailable", 20)
     connected = wait_for_log(log_start, r"client \d+ accepted", 20)
     ok = True
     for label, line in (("native module attached", attached),
                         (f"running build {stamp}", loaded),
-                        ("features", features),
+                        ("offsets / features", offsets),
                         ("extension connected", connected)):
         mark = "OK  " if line else "FAIL"
         ok &= bool(line)

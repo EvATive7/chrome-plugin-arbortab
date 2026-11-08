@@ -1,7 +1,26 @@
 // WebSocket client for the ArborTab native module.
 
 const PORTS = [47821, 47822, 47823, 47824, 47825];
-const PROTOCOL = 1;
+// Message protocol spoken by this extension. Must stay within the native module's
+// [protocolMin, protocolMax] (native/src/link/protocol.h); see AGENTS.md, "版本与兼容".
+export const PROTOCOL = 1;
+const NO_FEATURES = { layout: false, twisty: false, paint: false, drag: false };
+
+/**
+ * Which side has to be updated, or null when the module speaks PROTOCOL. Modules predating
+ * protocolMin/protocolMax only report `protocol`.
+ */
+export function protocolMismatch(message) {
+  const min = message.protocolMin ?? message.protocol ?? PROTOCOL;
+  const max = message.protocolMax ?? message.protocol ?? PROTOCOL;
+  if (PROTOCOL < min) {
+    return 'extension';
+  }
+  if (PROTOCOL > max) {
+    return 'native';
+  }
+  return null;
+}
 
 export class NativeLink {
   constructor({ onMessage, onStatus, onHello } = {}) {
@@ -10,8 +29,12 @@ export class NativeLink {
     this.onHello = onHello || (() => {});
     this.socket = null;
     this.port = null;
-    this.features = { layout: false, twisty: false, paint: false, drag: false };
+    this.features = { ...NO_FEATURES };
     this.connected = false;
+    /** Last hello/status from the module: nativeVersion, offsets {status, schema, chromeVersion}. */
+    this.native = null;
+    /** 'extension' or 'native' when the protocols do not overlap; nothing is sent then. */
+    this.updateNeeded = null;
     this.portIndex = 0;
     this.retryDelay = 500;
     this.heartbeat = null;
@@ -80,13 +103,24 @@ export class NativeLink {
       } catch {
         return;
       }
-      if (message.type === 'hello') {
-        this.features = message.features || this.features;
-        this.onHello(message);
+      if (message.type === 'hello' || message.type === 'status') {
+        this.updateNeeded = protocolMismatch(message);
+        this.native = {
+          nativeVersion: message.nativeVersion,
+          offsets: message.offsets || null,
+          protocolMin: message.protocolMin ?? message.protocol,
+          protocolMax: message.protocolMax ?? message.protocol,
+        };
+        this.features = this.updateNeeded ? { ...NO_FEATURES } : { ...NO_FEATURES, ...message.features };
+        if (message.type === 'hello' && !this.updateNeeded) {
+          this.onHello(message);
+        }
         this.onStatus({ connected: true, features: this.features, nativeVersion: message.nativeVersion });
         return;
       }
-      this.onMessage(message);
+      if (!this.updateNeeded) {
+        this.onMessage(message);
+      }
     });
 
     const onDown = () => {
@@ -118,6 +152,9 @@ export class NativeLink {
   }
 
   send(message) {
+    if (this.updateNeeded && message.type !== 'hello' && message.type !== 'ping') {
+      return false;  // an incompatible module must not receive messages it would misread
+    }
     const payload = typeof message === 'string' ? message : JSON.stringify(message);
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       if (message.type === 'state') {

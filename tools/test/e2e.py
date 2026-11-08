@@ -138,6 +138,11 @@ def tree_scenario() -> int:
     ok = report("extension connected to the native module", bool(state.get("connected")),
                 json.dumps(state.get("features")))
     ok &= report("native layout feature enabled", bool(state.get("features", {}).get("layout")))
+    native = state.get("native") or {}
+    ok &= report("protocols are compatible", state.get("updateNeeded") is None,
+                 f"module range {native.get('protocolMin')}..{native.get('protocolMax')}")
+    ok &= report("offsets are ready", (native.get("offsets") or {}).get("status") == "ready",
+                 json.dumps(native.get("offsets")))
 
     order_before, _ = window_tree(worker, browser)
     parent = order_before[0]

@@ -51,8 +51,10 @@ const std::wstring& ConfigPath() {
   return g_config_path;
 }
 
-std::wstring CachedOffsetsPath(const std::string& pdb_key) {
+std::wstring CachedOffsetsPath(int schema, const std::string& pdb_key) {
   std::wstring dir = DataDir() + L"\\offsets";
+  CreateDirectoryW(dir.c_str(), nullptr);
+  dir += L"\\s" + std::to_wstring(schema);
   CreateDirectoryW(dir.c_str(), nullptr);
   const std::wstring wide_key(pdb_key.begin(), pdb_key.end());
   return dir + L"\\" + wide_key + L".json";

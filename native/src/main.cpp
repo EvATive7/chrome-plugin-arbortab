@@ -16,7 +16,13 @@
 
 namespace {
 
-constexpr const char* kModuleVersion = "0.1.0";
+// ARBORTAB_VERSION comes from the repository's VERSION file (native/CMakeLists.txt).
+constexpr const char* kModuleVersion = ARBORTAB_VERSION;
+#ifdef ARBORTAB_BUILD_STAMP
+constexpr const char* kBuildStamp = ARBORTAB_BUILD_STAMP;  // "MM-DD HH:MM", for tools/dev/dev.py
+#else
+constexpr const char* kBuildStamp = "unknown";
+#endif
 constexpr const wchar_t* kChromeDllName = L"chrome.dll";
 
 // The DLL notification callback runs while the loader lock is held: it must not log, allocate
@@ -43,11 +49,20 @@ struct DllLoadedData {
 using DllNotificationCallback = void(CALLBACK*)(ULONG, const DllLoadedData*, PVOID);
 using LdrRegisterDllNotificationFn = LONG(NTAPI*)(ULONG, DllNotificationCallback, PVOID, PVOID*);
 
-void OnOffsetsResolved(bool ok, const arbortab::Offsets& offsets, const char* error) {
-  if (!ok) {
-    ARB_ERROR("offsets unavailable: %s", error ? error : "unknown error");
-    return;
+std::string g_chrome_version;  // written by the offsets worker before every status update
+
+void OnOffsetsStatus(arbortab::OffsetsStatus status, const std::string& chrome_version) {
+  g_chrome_version = chrome_version;
+  if (status == arbortab::OffsetsStatus::kReady) {
+    return;  // reported together with the features once the hooks are installed
   }
+  arbortab::ServerStatus server;
+  server.offsets = arbortab::OffsetsStatusName(status);
+  server.chrome_version = chrome_version;
+  arbortab::UpdateServerStatus(server);
+}
+
+void OnOffsetsResolved(const arbortab::Offsets& offsets) {
   ARB_INFO("offsets ready (source=%s, chrome=%s, hooks=%zu)", offsets.source.c_str(),
            offsets.chrome_version.c_str(), offsets.hooks.size());
   const arbortab::FeatureState features =
@@ -56,17 +71,26 @@ void OnOffsetsResolved(bool ok, const arbortab::Offsets& offsets, const char* er
   if (!features.layout) {
     ARB_WARN("no feature could be enabled; Chrome keeps its native tab strip");
   }
-  arbortab::ServerFeatures server_features;
-  server_features.layout = features.layout;
-  server_features.twisty = features.twisty;
-  server_features.paint = features.paint;
-  server_features.drag = features.drag;
-  const int port = arbortab::StartWebSocketServer(server_features, kModuleVersion);
+  arbortab::ServerStatus server;
+  server.features.layout = features.layout;
+  server.features.twisty = features.twisty;
+  server.features.paint = features.paint;
+  server.features.drag = features.drag;
+  server.offsets = arbortab::OffsetsStatusName(arbortab::OffsetsStatus::kReady);
+  server.chrome_version = offsets.chrome_version.empty() ? g_chrome_version : offsets.chrome_version;
+  arbortab::UpdateServerStatus(server);
+}
+
+// The endpoint comes up before the offsets, so the extension can report "waiting for offsets"
+// instead of "not installed".
+void StartPipeline(HMODULE chrome) {
+  const int port = arbortab::StartWebSocketServer(kModuleVersion);
   if (port) {
     ARB_INFO("extension endpoint ready: ws://127.0.0.1:%d/arbortab", port);
   } else {
     ARB_WARN("extension endpoint unavailable; tab tree state cannot be applied");
   }
+  arbortab::StartOffsetsResolution(chrome, &OnOffsetsResolved, &OnOffsetsStatus);
 }
 
 void CALLBACK OnDllNotification(ULONG reason, const DllLoadedData* data, PVOID) {
@@ -95,7 +119,7 @@ DWORD WINAPI PipelineThread(LPVOID) {
         continue;
       }
       ARB_INFO("chrome.dll mapped at %p", chrome);
-      arbortab::StartOffsetsResolution(chrome, &OnOffsetsResolved);
+      StartPipeline(chrome);
       return 0;
     }
     // Periodically check GetModuleHandle: the notification only fires while our hook is
@@ -103,7 +127,7 @@ DWORD WINAPI PipelineThread(LPVOID) {
     if (HMODULE chrome = GetModuleHandleW(kChromeDllName)) {
       g_chrome_base = chrome;
       ARB_INFO("chrome.dll already mapped at %p", chrome);
-      arbortab::StartOffsetsResolution(chrome, &OnOffsetsResolved);
+      StartPipeline(chrome);
       return 0;
     }
   }
@@ -205,8 +229,8 @@ DWORD WINAPI InitThread(LPVOID) {
   } else if (level == "error") {
     arbortab::LogSetLevel(arbortab::LogLevel::kError);
   }
-  ARB_INFO("ArborTab native %s attached to browser process %lu (log=%ls)", kModuleVersion,
-           GetCurrentProcessId(), arbortab::LogPath().c_str());
+  ARB_INFO("ArborTab native %s (build %s) attached to browser process %lu (log=%ls)",
+           kModuleVersion, kBuildStamp, GetCurrentProcessId(), arbortab::LogPath().c_str());
   HMODULE self = nullptr;
   GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                          GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,

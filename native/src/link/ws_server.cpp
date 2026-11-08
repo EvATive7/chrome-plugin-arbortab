@@ -17,7 +17,9 @@
 #include "core/ui_thread.h"
 #include "features/drag.h"
 #include "features/layout.h"
+#include "core/offsets.h"
 #include "json.hpp"
+#include "link/protocol.h"
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -203,7 +205,8 @@ struct Client {
   std::mutex write_mutex;
 };
 
-ServerFeatures g_features;
+std::mutex g_status_mutex;
+ServerStatus g_status;
 std::string g_native_version;
 int g_port = 0;
 SOCKET g_listen = INVALID_SOCKET;
@@ -261,16 +264,27 @@ bool ReadAll(SOCKET socket, uint8_t* data, size_t size) {
   return true;
 }
 
-std::string NativeHelloJson() {
-  nlohmann::json hello;
-  hello["type"] = "hello";
-  hello["protocol"] = 1;
-  hello["nativeVersion"] = g_native_version;
-  hello["features"] = {{"layout", g_features.layout},
-                       {"twisty", g_features.twisty},
-                       {"paint", g_features.paint},
-                       {"drag", g_features.drag}};
-  return hello.dump();
+// `hello` (reply to the extension's hello) and `status` (pushed on change) share one body.
+std::string StatusJson(const char* type) {
+  ServerStatus status;
+  {
+    std::lock_guard<std::mutex> lock(g_status_mutex);
+    status = g_status;
+  }
+  nlohmann::json message;
+  message["type"] = type;
+  message["protocol"] = kProtocolMax;
+  message["protocolMin"] = kProtocolMin;
+  message["protocolMax"] = kProtocolMax;
+  message["nativeVersion"] = g_native_version;
+  message["features"] = {{"layout", status.features.layout},
+                         {"twisty", status.features.twisty},
+                         {"paint", status.features.paint},
+                         {"drag", status.features.drag}};
+  message["offsets"] = {{"status", status.offsets},
+                        {"schema", kOffsetsSchema},
+                        {"chromeVersion", status.chrome_version}};
+  return message.dump();
 }
 
 void HandleMessageUnsafe(Client& client, const std::string& text) {
@@ -284,8 +298,9 @@ void HandleMessageUnsafe(Client& client, const std::string& text) {
   const std::string type = message.value("type", std::string());
   if (type == "hello") {
     const std::string version = message.value("extVersion", std::string("?"));
-    ARB_INFO("extension %s connected (origin %s)", version.c_str(), client.origin.c_str());
-    SendFrame(client, 0x1, NativeHelloJson());
+    ARB_INFO("extension %s connected (origin %s, protocol %d)", version.c_str(),
+             client.origin.c_str(), message.value("protocol", 0));
+    SendFrame(client, 0x1, StatusJson("hello"));
     return;
   }
   if (type == "ping") {
@@ -537,7 +552,7 @@ void HandleConnection(SOCKET socket) {
     g_clients[client->id] = client;
   }
   ARB_INFO("client %d accepted (origin %s)", client->id, client->origin.c_str());
-  SendFrame(*client, 0x1, NativeHelloJson());
+  SendFrame(*client, 0x1, StatusJson("hello"));
   std::thread(&ClientLoop, client).detach();
 }
 
@@ -559,11 +574,20 @@ void AcceptLoop() {
 
 }  // namespace
 
-int StartWebSocketServer(const ServerFeatures& features, const std::string& native_version) {
+void UpdateServerStatus(const ServerStatus& status) {
+  {
+    std::lock_guard<std::mutex> lock(g_status_mutex);
+    g_status = status;
+  }
+  if (g_running) {
+    BroadcastJson(StatusJson("status"));
+  }
+}
+
+int StartWebSocketServer(const std::string& native_version) {
   if (g_running) {
     return g_port;
   }
-  g_features = features;
   g_native_version = native_version;
 
   WSADATA wsa{};

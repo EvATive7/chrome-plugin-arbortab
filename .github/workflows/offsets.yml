@@ -34,11 +34,16 @@ jobs:
         id: existing
         shell: pwsh
         run: |
+          # Offsets are published per schema: a schema bump makes every version "unresolved".
+          $schema = (Select-String -Path resolver/spec.yaml -Pattern '^schema:\s*(\d+)').Matches[0].Groups[1].Value
+          "schema=$schema" >> $env:GITHUB_OUTPUT
           $exists = $false
           git fetch origin offsets:refs/remotes/origin/offsets 2>$null
           if ($LASTEXITCODE -eq 0) {
-            $index = git show origin/offsets:index.json 2>$null | ConvertFrom-Json
-            if ($index.versions.PSObject.Properties.Name -contains '${{ steps.chrome.outputs.version }}') { $exists = $true }
+            git worktree add --detach D:\offsets-branch origin/offsets 2>$null
+            uv run python -I tools/ci/offsets_index.py has D:\offsets-branch $schema '${{ steps.chrome.outputs.version }}'
+            $exists = $LASTEXITCODE -eq 0
+            git worktree remove --force D:\offsets-branch
           } else {
             Write-Host 'offsets branch does not exist yet; treating this version as unresolved'
           }
@@ -96,6 +101,9 @@ jobs:
         run: |
           $version = '${{ steps.chrome.outputs.version }}'
           $key = '${{ steps.pdb.outputs.key }}'
+          $schema = '${{ steps.existing.outputs.schema }}'
+          # The script lives on main, which is about to be switched away.
+          Copy-Item tools/ci/offsets_index.py D:\arbortab\offsets_index.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git fetch origin offsets:refs/remotes/origin/offsets 2>$null
@@ -105,13 +113,10 @@ jobs:
             git switch --orphan offsets
             git rm -rf . --quiet
           }
-          New-Item -ItemType Directory -Force win64 | Out-Null
-          Copy-Item "D:\arbortab\$key.json" "win64\$key.json"
-          $index = if (Test-Path index.json) { Get-Content index.json -Raw | ConvertFrom-Json -AsHashtable } else { @{schema=1; versions=@{}} }
-          $index.versions[$version] = $key
-          $index | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 index.json
-          git add index.json "win64/$key.json"
-          git commit -m "offsets: Chrome $version"
+          uv run python -I D:\arbortab\offsets_index.py add . $schema $version $key "D:\arbortab\$key.json"
+          if ($LASTEXITCODE -ne 0) { throw 'publishing the offsets failed' }
+          git add -A index.json win64
+          git commit -m "offsets: Chrome $version (schema $schema)"
           git push origin offsets
           $global:LASTEXITCODE = 0
 

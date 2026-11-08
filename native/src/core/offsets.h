@@ -10,6 +10,22 @@
 
 namespace arbortab {
 
+// Offsets file format this build understands; must equal `schema` in resolver/spec.yaml.
+// Bump it whenever the module needs entries older files do not have, or the format changes:
+// files live under win64/s<schema>/ remotely and offsets\s<schema>\ locally, so a new
+// schema never reads a stale cache. See AGENTS.md ("偏移量").
+constexpr int kOffsetsSchema = 1;
+
+// Lifecycle of the offsets pipeline, reported to the extension.
+enum class OffsetsStatus {
+  kResolving,    // reading the cache or downloading
+  kWaiting,      // nothing published for this Chrome build yet; retrying periodically
+  kReady,        // loaded and validated
+  kDisabled,     // downloads disabled by config.ini and nothing cached
+  kError,        // chrome.dll unreadable, or every candidate file failed validation
+};
+const char* OffsetsStatusName(OffsetsStatus status);
+
 struct FunctionEntry {
   uint32_t rva = 0;
   std::vector<uint8_t> prologue;
@@ -48,16 +64,22 @@ std::string PdbKeyFromModule(HMODULE chrome_dll, std::string* pdb_name = nullptr
 // Full chrome version ("156.0.8078.80") from chrome.dll's version resource, empty on failure.
 std::string ChromeVersionFromModule(HMODULE chrome_dll);
 
-bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& error);
+// Parses and validates an offsets file: it must use kOffsetsSchema and, when expected_pdb_key
+// is not empty, describe exactly that chrome.dll build.
+bool LoadOffsetsFromFile(const std::wstring& path, const std::string& expected_pdb_key,
+                         Offsets& out, std::string& error);
 
 // Synchronous HTTPS GET; returns the HTTP status code, 0 on transport failure.
 int HttpGet(const std::wstring& url, std::string& body);
 
-using OffsetsResolvedCallback = void (*)(bool ok, const Offsets& offsets, const char* error);
+using OffsetsResolvedCallback = void (*)(const Offsets& offsets);
+using OffsetsStatusCallback = void (*)(OffsetsStatus status, const std::string& chrome_version);
 
-// Runs the "cache -> download -> retry" pipeline on a background thread. The callback fires
-// at most once per successful load; failures are logged and retried every 30 minutes.
-void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback callback);
+// Runs the "cache -> download -> retry" pipeline on a background thread. `on_status` reports
+// every state change; `on_resolved` fires once, after the offsets are loaded and validated.
+// Missing offsets are retried every 30 minutes.
+void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback on_resolved,
+                            OffsetsStatusCallback on_status);
 
 const wchar_t* OffsetsUrlPrefix();
 

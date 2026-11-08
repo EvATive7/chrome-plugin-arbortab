@@ -3,23 +3,26 @@
 ArborTab 让 Chrome 原生的**垂直标签栏**变成树状标签（Windows x64）。由两部分组成：
 
 - **扩展**（`extension/`，MV3）：维护标签树（父子、折叠），执行所有结构操作（`chrome.tabs.move` 等），并把显示状态推给原生模块。
-- **原生模块**（`native/`，`version.dll` 代理）：放在 `chrome.exe` 同目录，被浏览器进程加载后用 MinHook 接管标签栏的布局、绘制、鼠标和拖拽，实现缩进、隐藏、折叠标记、拖放落点。通过 `ws://127.0.0.1:47821-47825/arbortab` 与扩展通信。
-- **偏移量**：原生模块所需的函数 RVA、字段偏移、vtable 等按 Chrome 版本由 `resolver/` 从官方 PDB 生成，CI 发布到 `offsets` 分支，运行时按 PDB key 下载。
+- **原生模块**（`native/`，`version.dll` 代理）：放在 `chrome.exe` 同目录，被浏览器进程加载后用 MinHook 接管标签栏的布局、绘制、鼠标和拖拽，实现缩进、隐藏、折叠标记、拖放落点。通过 `ws://127.0.0.1:47821-47825/arbortab` 与扩展通信（见“通信协议”）。
+- **偏移量**：原生模块所需的函数 RVA、字段偏移、vtable 等按 Chrome 版本由 `resolver/` 从官方 PDB 生成，CI 发布到 `offsets` 分支，运行时按 PDB key 下载并永久缓存（见“偏移量”）。
 
 ## 目录结构
 
 ```
-extension/          MV3 扩展；src/background/tree.js 是纯树模型，test/ 是它的单元测试
-native/             version.dll（CMake + MSVC）；src/core 基础设施、src/features 各功能、src/link WebSocket
+VERSION             发布版本号的唯一来源（MAJOR.MINOR.PATCH）
+extension/          MV3 扩展；src/background/tree.js 是纯树模型，test/ 是单元测试；icons/ 由 assets/logo/make.py 生成
+native/             version.dll（CMake + MSVC）；src/core 基础设施、src/features 各功能、src/link 通信（protocol.h 协议号）
   third_party/      vendored MinHook、nlohmann/json
-resolver/           resolve.py + spec.yaml：从 chrome.dll + PDB 生成偏移量 JSON（缺任何一项即失败）
-offsets/            已发布偏移量的本地副本（运行时实际从 GitHub offsets 分支下载）：index.json（版本 → PDB key）、win64/<key>.json
+resolver/           resolve.py + spec.yaml：从 chrome.dll + PDB 生成偏移量 JSON（缺任何一项即失败）；spec.yaml 的 schema 即偏移量 schema
+offsets/            offsets 分支的样例副本（运行时实际从 GitHub 下载）：index.json + win64/s<schema>/<key>.json
+packaging/windows/  随原生包发给用户的 install/uninstall 脚本（.cmd 包装 .ps1，兼容 Windows PowerShell 5.1）
+assets/             logo（logo/make.py 生成）、README 截图
 tools/
-  ci/               CI 用：query-chrome.py（Omaha 查稳定版）、extract-chrome.ps1（解包安装包）
+  ci/               CI 用：query-chrome.py、extract-chrome.ps1、offsets_index.py（offsets 分支布局）、check_repo.py（一致性检查）、package.py（打包）
   dev/              本地开发：build-native.ps1、dev.py/dev.ps1（一键重建+重启沙盒）、sandbox.py、nativecheck.py
   re/               逆向/符号：pdbinfo.py、symq.py、dis.py
   test/             e2e.py（沙盒 Chrome 中的端到端检查）
-.github/workflows/  offsets.yml：每 6 小时检查新稳定版并发布偏移量
+.github/workflows/  ci.yml（检查+构建）、release.yml（tag → 草稿 Release）、offsets.yml（每 6 小时发布新版 Chrome 的偏移量）
 artifacts/ build/   本地产物（已 gitignore）
 ```
 
@@ -32,8 +35,14 @@ pwsh -File tools/dev/build-native.ps1 [-Configuration Debug]
 # 一键开发循环：构建 → 停沙盒 → 装 DLL → 启动 → 加载扩展 → 从 native.log 核对正在运行的构建
 pwsh -File tools/dev/dev.ps1 [-NoBuild]
 
-# 树模型单元测试
-node --test extension/test/tree.test.mjs
+# 扩展单元测试（树模型、协议检查）
+node --test extension/test/*.test.mjs
+
+# 版本号 / 多语言文案 / offsets 样例一致性（CI 同款）
+uv run python tools/ci/check_repo.py
+
+# 本地打包（与 release.yml 相同）
+uv run python tools/ci/package.py --dll artifacts/native/version.dll --out dist
 
 # 端到端（需沙盒 Chrome 已运行）
 uv run --with websocket-client python tools/test/e2e.py tree|drop|tree-visual
@@ -50,16 +59,77 @@ uv run --with pefile --with pyyaml python resolver/resolve.py --dll <chrome.dll>
 ## 工作约定
 
 - **只动沙盒 Chrome，不碰本机安装的 Chrome**。沙盒目录默认 `C:\Users\evative7\Desktop\Playground\_test\portable`（`ARBORTAB_SANDBOX` 可改），CDP 端口 9334（`ARBORTAB_CDP_PORT`）。
-- 新版本 Chrome 需要新符号/字段时，改 `resolver/spec.yaml`，不要在原生代码里硬编码偏移。
+- 新版本 Chrome 需要新符号/字段时，改 `resolver/spec.yaml`，不要在原生代码里硬编码偏移（同时看“偏移量”里的 schema 规则）。
+- **失败即不改动**：偏移量、协议、身份任一校验不通过，原生功能整体关闭、标签栏保持原样，并通过 `status` 让设置页说明原因。不要为了“能用”放宽校验。
+- 用户可见文案改动要同步 `extension/_locales/` 全部 8 种语言，`check_repo.py` 会检查键是否一致。
 - 代码与注释用英文；文档用中文。
 - 涉及标签栏坐标、真实鼠标拖拽的行为无法可靠自动化（见踩坑 13），改动后需人工在沙盒里验证一次；其余逻辑用 `e2e.py` 的测试钩子（`arbortab.__testDrop` 等）覆盖。
+
+## 版本与兼容
+
+扩展由商店自动更新，DLL 靠用户手动替换，两者必然长期错开。因此**兼容性只看契约号，从不要求两边版本号相同**。
+
+- **发布版本**：唯一来源是根目录 `VERSION`。CMake 读取它生成 `ARBORTAB_VERSION` 和 DLL 版本资源；`extension/manifest.json` 的 `version` 必须与之相同（`check_repo.py` 检查）。发版时同时改这两处，再打 `vX.Y.Z` tag。
+- **通信协议号**：`native/src/link/protocol.h` 的 `kProtocolMin/kProtocolMax` 与 `extension/src/background/native-link.js` 的 `PROTOCOL`。
+  - 对已有消息做**不兼容**修改（改字段含义、删字段、改必需字段）：`kProtocolMax` +1，扩展的 `PROTOCOL` 随之 +1。
+  - 只**新增**旧端可忽略的字段或消息：不升号。
+  - 只有原生模块确定不再支持某个旧协议时，才提高 `kProtocolMin`。
+  - 扩展握手时检查 `PROTOCOL ∈ [protocolMin, protocolMax]`；不在范围内就停止向 DLL 发送任何业务消息，设置页提示更新哪一边。
+- **偏移量 schema**：`resolver/spec.yaml` 的 `schema` 与 `native/src/core/offsets.h` 的 `kOffsetsSchema`，两者必须相等。规则见下一节。
+
+## 偏移量
+
+- **生成**：`offsets.yml` 每 6 小时查询 stable 版本，PDB 上线后运行 resolver，发布到 `offsets` 分支。分支布局（由 `tools/ci/offsets_index.py` 维护，它也负责把旧布局迁移过来）：
+
+  ```
+  index.json                       {"format": 2, "schemas": {"<schema>": {"<chrome 版本>": "<pdb key>"}}}
+  win64/s<schema>/<pdb key>.json
+  ```
+
+- **运行时**：DLL 按 `(kOffsetsSchema, pdbKey)` 查缓存 `%LOCALAPPDATA%\ArborTab\offsets\s<schema>\<key>.json`。没有缓存就依次从 GitHub raw、jsDelivr 下载，校验通过后原子写入缓存；都失败则每 30 分钟重试。同一个 PDB key 的二进制事实永不改变，所以**缓存永久有效、不做定期刷新**。
+- **加载校验**（`LoadOffsetsFromFile`）：`schema` 必须等于 `kOffsetsSchema`，`pdbKey` 必须等于当前 `chrome.dll` 的 key；不通过的缓存会被删除并重新下载。
+- **什么时候必须升 schema**：DLL 开始依赖旧文件里没有的条目（新增 hook、字段、vtable 等），或文件格式变化。做法：
+  1. `spec.yaml` 的 `schema` 与 `kOffsetsSchema` 同时 +1；
+  2. 手动触发 offsets 工作流，为仍在使用的 Chrome 版本（当前 stable 及前两个）重新生成；新 schema 的文件到位之前，新 DLL 会显示“等待适配”；
+  3. 旧 schema 的文件保留，供旧 DLL 继续使用。
+  只给 spec 增加旧 DLL 用不到的条目时不必升号，但新条目对旧版本缺失，所以**新 DLL 不能依赖未升 schema 的新条目**。
+- **状态上报**：偏移量管线把状态（`resolving`、`waiting`、`ready`、`disabled`、`error`）通过 `hello`/`status` 报给扩展；设置页据此区分“未安装”“等待适配”“校验失败”等情况。
+
+## 通信协议
+
+- **传输**：DLL 在 `chrome.dll` 映射后**立即**启动 WebSocket 服务（127.0.0.1:47821–47825 中第一个可用端口），不等偏移量，这样扩展才能区分“未安装”和“等待偏移量”。扩展依次尝试这些端口；服务端校验 `Origin: chrome-extension://<id>`，`config.ini` 的 `extensions` 可限定 ID（为空时放行任意扩展，正式版前需收紧）。
+- **握手**：扩展发 `hello {protocol, extVersion}`；DLL 回 `hello {protocolMin, protocolMax, nativeVersion, features, offsets {status, schema, chromeVersion}}`。状态变化时（偏移量到位、功能启用）DLL 主动推送同样结构的 `status`。
+- **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount、外观配置），DLL 只负责照着画、不保存树；DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragEnd`。调试：`debug.layout`。
+- **已知不足**：固定端口段存在多个 Chrome 实例时可能连错，也可能被本机其它程序抢占。计划改为 Native Messaging + 按浏览器 PID 命名的管道（见“发布与分发”的后续计划）。
+
+## 发布与分发
+
+- **流程**：改 `VERSION` 与 manifest → 合入 main（`ci.yml` 通过）→ 推 `vX.Y.Z` tag → `release.yml` 构建并创建**草稿** Release（扩展 zip、原生 zip、单独的 install.ps1/uninstall.ps1、SHA256SUMS）→ 在沙盒里人工验证真实拖拽 → 发布草稿。
+- **用户安装方式**：设置页（未连接或需要更新时）给出一行命令，README 里也有同一行：
+
+  ```
+  powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/EvATive7/chrome-plugin-arbortab/releases/latest/download/install.ps1 | iex"
+  ```
+
+  - 因此每个 Release 除了 zip，还必须单独上传 `install.ps1`、`uninstall.ps1` 作为资产（`package.py` 已处理）。**资产名不要改**，否则已发出去的命令会失效。
+  - 安全取舍只在设置页、README 这些给出命令的地方说明，运行命令即视为同意；脚本里不再询问。
+  - `install.ps1` 发现身边没有 `version.dll`（即一行命令模式），就通过 GitHub API 下载最新 Release 的 `arbortab-native-*-win64.zip`，解压后运行包内的 `install.ps1`。提权重启必须基于文件，所以要先落盘再运行；`uninstall.ps1` 同理，会先把自己下载到临时目录。
+  - 在 `irm | iex` 下**绝不能调用 `exit`**（会关掉用户的控制台），只能 `return`/`throw`；Windows PowerShell 5.1 要显式启用 TLS 1.2 才能访问 GitHub。
+  - 测试时用环境变量 `ARBORTAB_PACKAGE`（本地 zip，代替下载）和 `ARBORTAB_CHROME_DIR`（目标目录，如沙盒）。`iex` 无法传参，便携版 Chrome 也只能用 `ARBORTAB_CHROME_DIR` 指定，**测试时务必设置它，否则会装进本机 Chrome**。
+- **原生包**：`version.dll` + `install.cmd`/`install.ps1` + `uninstall.cmd`/`uninstall.ps1` + LICENSE，供想先检查文件再安装的用户使用。安装脚本会：
+  - 找到系统级和用户级 Chrome，并要求 Chrome 已退出；
+  - 只在目录不可写时才请求管理员权限；
+  - 拒绝覆盖不是 ArborTab 的 `version.dll`（按版本资源的 ProductName 判断）；
+  - 把安装位置记录到 `%LOCALAPPDATA%\ArborTab\install.json`，供卸载使用。
+- **扩展包**：打包时去掉 manifest 的 `key`（商店会分配自己的 ID）、测试和签名材料。
+- **后续计划**（尚未实现）：Native Messaging 桥替换 WebSocket；偏移量签名（ed25519，公钥编入 DLL）与撤回通道；DLL 代码签名；商店自动上传；extended-stable 等更多渠道。实测待办：Chrome 自动更新后 `Application\version.dll` 是否保留；SmartScreen/Defender 对未签名 DLL 的反应。
 
 ## 环境
 
 - Windows x64，VS 2022 Build Tools（MSVC 14.44，`vcvars64.bat`）、Windows SDK 10.0.26100、cmake + Ninja、uv、node。
 - cdb：`C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\`
 - 本地 PDB 缓存（Chrome 156，5.7GB）：`C:\Users\evative7\Desktop\Playground\_dl\pdb\chrome.dll.pdb`
-- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。该版本全部 RVA/偏移见 `offsets/win64/B2C7C3B72F30D3ED4C4C44205044422E1.json`。
+- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。该版本全部 RVA/偏移见 `offsets/win64/s1/B2C7C3B72F30D3ED4C4C44205044422E1.json`。
 
 ### Chromium 源码取用
 

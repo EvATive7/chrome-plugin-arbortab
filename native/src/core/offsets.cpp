@@ -20,6 +20,16 @@ constexpr const wchar_t* kOffsetsUrlPrefix =
     L"https://raw.githubusercontent.com/EvATive7/chrome-plugin-arbortab/offsets/win64/";
 constexpr const wchar_t* kMirrorUrlPrefix =
     L"https://cdn.jsdelivr.net/gh/EvATive7/chrome-plugin-arbortab@offsets/win64/";
+
+// "s<schema>/<key>.json" below one of the prefixes above.
+std::wstring RemoteName(const std::string& key) {
+  return L"s" + std::to_wstring(kOffsetsSchema) + L"/" + std::wstring(key.begin(), key.end()) +
+         L".json";
+}
+
+bool SameKey(const std::string& a, const std::string& b) {
+  return a.size() == b.size() && _stricmp(a.c_str(), b.c_str()) == 0;
+}
 constexpr int kRetryMinutes = 30;
 
 std::vector<uint8_t> HexBytes(const std::string& text) {
@@ -89,6 +99,17 @@ bool ReadWholeFile(const std::wstring& path, std::string& out) {
 }  // namespace
 
 const wchar_t* OffsetsUrlPrefix() { return kOffsetsUrlPrefix; }
+
+const char* OffsetsStatusName(OffsetsStatus status) {
+  switch (status) {
+    case OffsetsStatus::kResolving: return "resolving";
+    case OffsetsStatus::kWaiting: return "waiting";
+    case OffsetsStatus::kReady: return "ready";
+    case OffsetsStatus::kDisabled: return "disabled";
+    case OffsetsStatus::kError: return "error";
+  }
+  return "error";
+}
 
 std::string PdbKeyFromModule(HMODULE chrome_dll, std::string* pdb_name) {
   auto* base = reinterpret_cast<uint8_t*>(chrome_dll);
@@ -173,7 +194,8 @@ std::string ChromeVersionFromModule(HMODULE chrome_dll) {
   return version;
 }
 
-bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& error) {
+bool LoadOffsetsFromFile(const std::wstring& path, const std::string& expected_pdb_key,
+                         Offsets& out, std::string& error) {
   try {
   std::string text;
   if (!ReadWholeFile(path, text)) {
@@ -202,6 +224,15 @@ bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& er
   parsed.chrome_version = JsonField(root, "chromeVersion");
   parsed.pdb_key = JsonField(root, "pdbKey");
   parsed.pdb_name = JsonField(root, "pdbName");
+  if (parsed.schema != kOffsetsSchema) {
+    error = "offsets schema " + std::to_string(parsed.schema) + " is not the supported schema " +
+            std::to_string(kOffsetsSchema);
+    return false;
+  }
+  if (!expected_pdb_key.empty() && !SameKey(parsed.pdb_key, expected_pdb_key)) {
+    error = "offsets describe PDB " + parsed.pdb_key + ", not the loaded " + expected_pdb_key;
+    return false;
+  }
 
   const auto object = [&root](const char* key) -> nlohmann::json {
     const auto found = root.find(key);
@@ -350,80 +381,98 @@ int HttpGet(const std::wstring& url, std::string& body) {
   return status;
 }
 
-void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback callback) {
+void StartOffsetsResolution(HMODULE chrome_dll, OffsetsResolvedCallback on_resolved,
+                            OffsetsStatusCallback on_status) {
   std::string pdb_name;
   const std::string key = PdbKeyFromModule(chrome_dll, &pdb_name);
   const std::string version = ChromeVersionFromModule(chrome_dll);
   if (key.empty()) {
     ARB_ERROR("chrome.dll has no CodeView record, offsets are unavailable");
+    on_status(OffsetsStatus::kError, version);
     return;
   }
-  ARB_INFO("chrome.dll version=%s pdb=%s key=%s", version.c_str(), pdb_name.c_str(), key.c_str());
+  ARB_INFO("chrome.dll version=%s pdb=%s key=%s schema=%d", version.c_str(), pdb_name.c_str(),
+           key.c_str(), kOffsetsSchema);
+  on_status(OffsetsStatus::kResolving, version);
 
-  auto* base = reinterpret_cast<HMODULE>(chrome_dll);
-  std::thread([key, version, callback, base] {
+  std::thread([key, version, on_resolved, on_status] {
    try {
+    const std::wstring cached = CachedOffsetsPath(kOffsetsSchema, key);
     for (;;) {
       Offsets offsets;
       std::string error;
-      const std::wstring cached = CachedOffsetsPath(key);
-      if (LoadOffsetsFromFile(cached, offsets, error)) {
+      if (LoadOffsetsFromFile(cached, key, offsets, error)) {
         offsets.source = "cache";
         ARB_INFO("loaded offsets from cache: %ls", cached.c_str());
-        callback(true, offsets, nullptr);
+        on_status(OffsetsStatus::kReady, version);
+        on_resolved(offsets);
         return;
+      }
+      if (GetFileAttributesW(cached.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        // A cached file that no longer validates is never trusted again.
+        ARB_WARN("discarding cached offsets (%s)", error.c_str());
+        DeleteFileW(cached.c_str());
+      } else {
+        ARB_INFO("offsets not cached yet");
       }
 
-      ARB_WARN("offsets not cached (%s)", error.c_str());
       if (ReadConfigInt("disableDownload", 0) != 0) {
         ARB_WARN("downloads are disabled by config.ini (disableDownload=1); features stay off");
+        on_status(OffsetsStatus::kDisabled, version);
         return;
       }
-      ARB_WARN("downloading offsets for key %s", key.c_str());
-      const std::wstring wide_key(key.begin(), key.end());
-      std::vector<std::wstring> urls = {
-          std::wstring(kOffsetsUrlPrefix) + wide_key + L".json",
-          std::wstring(kMirrorUrlPrefix) + wide_key + L".json",
-      };
+      on_status(OffsetsStatus::kResolving, version);
+      ARB_INFO("downloading offsets for key %s (schema %d)", key.c_str(), kOffsetsSchema);
+      const std::wstring name = RemoteName(key);
+      const std::wstring urls[] = {std::wstring(kOffsetsUrlPrefix) + name,
+                                   std::wstring(kMirrorUrlPrefix) + name};
       bool downloaded = false;
+      bool rejected = false;
       for (const std::wstring& url : urls) {
         std::string body;
         const int status = HttpGet(url, body);
-        if (status == 200 && !body.empty()) {
-          const std::wstring temp = cached + L".tmp";
-          {
-            std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-            file.write(body.data(), static_cast<std::streamsize>(body.size()));
-          }
-          std::string parse_error;
-          Offsets candidate;
-          if (LoadOffsetsFromFile(temp, candidate, parse_error)) {
-            MoveFileExW(temp.c_str(), cached.c_str(), MOVEFILE_REPLACE_EXISTING);
-            candidate.source = "download";
-            offsets = std::move(candidate);
-            downloaded = true;
-            ARB_INFO("downloaded offsets for Chrome %s from %ls", version.c_str(), url.c_str());
-            break;
-          }
-          ARB_ERROR("downloaded offsets failed validation: %s", parse_error.c_str());
-          DeleteFileW(temp.c_str());
-        } else {
+        if (status != 200 || body.empty()) {
           ARB_WARN("offsets download failed (%d): %ls", status, url.c_str());
+          continue;
         }
+        const std::wstring temp = cached + L".tmp";
+        {
+          std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+          file.write(body.data(), static_cast<std::streamsize>(body.size()));
+        }
+        std::string parse_error;
+        Offsets candidate;
+        if (LoadOffsetsFromFile(temp, key, candidate, parse_error)) {
+          MoveFileExW(temp.c_str(), cached.c_str(), MOVEFILE_REPLACE_EXISTING);
+          candidate.source = "download";
+          offsets = std::move(candidate);
+          downloaded = true;
+          ARB_INFO("downloaded offsets for Chrome %s from %ls", version.c_str(), url.c_str());
+          break;
+        }
+        ARB_ERROR("downloaded offsets failed validation: %s", parse_error.c_str());
+        DeleteFileW(temp.c_str());
+        rejected = true;
       }
       if (downloaded) {
-        callback(true, offsets, nullptr);
+        on_status(OffsetsStatus::kReady, version);
+        on_resolved(offsets);
         return;
       }
-      ARB_WARN("no offsets for Chrome %s yet; retrying in %d minutes", version.c_str(),
+      // A file that was published but does not validate is an error worth surfacing; a missing
+      // file (or no network) just means "not yet".
+      on_status(rejected ? OffsetsStatus::kError : OffsetsStatus::kWaiting, version);
+      ARB_WARN("no usable offsets for Chrome %s yet; retrying in %d minutes", version.c_str(),
                kRetryMinutes);
       std::this_thread::sleep_for(std::chrono::minutes(kRetryMinutes));
     }
    } catch (const std::exception& exception) {
      // Never let an exception escape: this thread lives inside the browser process.
      ARB_ERROR("offsets worker failed: %s", exception.what());
+     on_status(OffsetsStatus::kError, version);
    } catch (...) {
      ARB_ERROR("offsets worker failed with an unknown exception");
+     on_status(OffsetsStatus::kError, version);
    }
   }).detach();
 }

@@ -23,6 +23,18 @@ if(MSVC)
   target_compile_options(minhook PRIVATE /W3 /O2)
 endif()
 
+# The release version has a single source: the repository's VERSION file (see AGENTS.md).
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" ARBORTAB_VERSION)
+string(STRIP "${ARBORTAB_VERSION}" ARBORTAB_VERSION)
+if(NOT ARBORTAB_VERSION MATCHES "^([0-9]+)[.]([0-9]+)[.]([0-9]+)$")
+  message(FATAL_ERROR "VERSION must be MAJOR.MINOR.PATCH, got '${ARBORTAB_VERSION}'")
+endif()
+set(ARBORTAB_VERSION_MAJOR ${CMAKE_MATCH_1})
+set(ARBORTAB_VERSION_MINOR ${CMAKE_MATCH_2})
+set(ARBORTAB_VERSION_PATCH ${CMAKE_MATCH_3})
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+configure_file(src/version.rc.in "${CMAKE_CURRENT_BINARY_DIR}/version.rc" @ONLY)
+
 set(ARBORTAB_SOURCES
   src/main.cpp
   src/core/chrome_api.cpp
@@ -43,16 +55,17 @@ set(ARBORTAB_SOURCES
   src/proxy/exports.cpp
 )
 
-add_library(version SHARED ${ARBORTAB_SOURCES} version.def)
+add_library(version SHARED ${ARBORTAB_SOURCES} version.def "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
 target_include_directories(version PRIVATE src third_party third_party/json)
 # version.dll itself is never linked: every forwarded call goes through GetProcAddress.
 target_link_libraries(version PRIVATE minhook winhttp shlwapi shell32)
-target_compile_definitions(version PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
-# Build time written to native.log (core/hooks.cpp), so tools/dev/dev.py can tell which DLL a
+target_compile_definitions(version PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS
+  ARBORTAB_VERSION="${ARBORTAB_VERSION}")
+# Build time written to native.log (main.cpp), so tools/dev/dev.py can tell which DLL a
 # running browser loaded. Taken at configure time; tools/dev/build-native.ps1 reconfigures on
 # every build.
 string(TIMESTAMP ARBORTAB_BUILD_STAMP "%m-%d %H:%M")
-set_source_files_properties(src/core/hooks.cpp PROPERTIES
+set_source_files_properties(src/main.cpp PROPERTIES
   COMPILE_DEFINITIONS "ARBORTAB_BUILD_STAMP=\"${ARBORTAB_BUILD_STAMP}\"")
 if(MSVC)
   target_compile_options(version PRIVATE /W4 /permissive- /Zc:__cplusplus /utf-8 /EHsc)

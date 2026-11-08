@@ -13,8 +13,19 @@ struct ServerFeatures {
   bool drag = false;
 };
 
+// What the module can currently do, reported in `hello` and in `status` messages.
+struct ServerStatus {
+  ServerFeatures features;
+  std::string offsets = "resolving";  // OffsetsStatusName(): resolving|waiting|ready|disabled|error
+  std::string chrome_version;
+};
+
 // Starts the listener on 127.0.0.1:47821..47825 and returns the bound port (0 on failure).
-int StartWebSocketServer(const ServerFeatures& features, const std::string& native_version);
+// It starts as soon as chrome.dll is known, before offsets exist, so the extension can tell
+// "not installed" from "waiting for offsets".
+int StartWebSocketServer(const std::string& native_version);
+// Replaces the reported status and pushes a `status` message to every client.
+void UpdateServerStatus(const ServerStatus& status);
 void StopWebSocketServer();
 
 // Sends one JSON text frame to every connected client.

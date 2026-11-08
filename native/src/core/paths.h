@@ -11,8 +11,8 @@ const std::wstring& DataDir();
 const std::wstring& LogDir();
 // %LOCALAPPDATA%\ArborTab\logs\native.log
 const std::wstring& LogPath();
-// %LOCALAPPDATA%\ArborTab\offsets\<pdbKey>.json
-std::wstring CachedOffsetsPath(const std::string& pdb_key);
+// %LOCALAPPDATA%\ArborTab\offsets\s<schema>\<pdbKey>.json
+std::wstring CachedOffsetsPath(int schema, const std::string& pdb_key);
 // %LOCALAPPDATA%\ArborTab\config.ini
 const std::wstring& ConfigPath();
 

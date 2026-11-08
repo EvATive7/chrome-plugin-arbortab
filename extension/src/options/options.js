@@ -216,11 +216,39 @@ const OFF_ICON =
   '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" ' +
   'stroke-linecap="round"><path d="M4 8h8"/></svg>';
 
-function setStatus(state, label, detail) {
+// Downloads install.ps1 from the latest release, which fetches and installs the native package
+// (packaging/windows/install.ps1). -NoExit keeps a Win+R window open so the result stays visible.
+const INSTALL_COMMAND =
+  'powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm ' +
+  'https://github.com/EvATive7/chrome-plugin-arbortab/releases/latest/download/install.ps1 | iex"';
+
+$('install-command').textContent = INSTALL_COMMAND;
+$('copy-command').addEventListener('click', async () => {
+  await navigator.clipboard.writeText(INSTALL_COMMAND);
+  const button = $('copy-command');
+  button.textContent = msg('copied');
+  setTimeout(() => (button.textContent = msg('copyCommand')), 1500);
+});
+
+function setStatus(state, label, detail, substitutions) {
   const status = $('native-status');
   status.className = state ? `pill ${state}` : 'pill';
   status.textContent = msg(label);
-  $('native-detail').textContent = msg(detail);
+  $('native-detail').textContent = msg(detail, substitutions);
+}
+
+// Pill and explanation for each offsets status the module reports (native: OffsetsStatusName).
+const OFFSETS_STATES = {
+  resolving: ['wait', 'statusPreparing', 'offsetsResolvingDetail'],
+  waiting: ['wait', 'statusWaiting', 'offsetsWaitingDetail'],
+  disabled: ['bad', 'statusDisabled', 'offsetsDisabledDetail'],
+  error: ['bad', 'statusError', 'offsetsErrorDetail'],
+};
+
+function showRows({ setup = false, version = false, features = false }) {
+  $('native-setup-row').hidden = !setup;
+  $('native-version-row').hidden = !version;
+  $('native-features-row').hidden = !features;
 }
 
 async function reportNativeStatus() {
@@ -228,18 +256,31 @@ async function reportNativeStatus() {
   try {
     reply = await chrome.runtime.sendMessage({ type: 'arbortab.status' });
   } catch {
+    showRows({});
     setStatus('', 'unknown', 'backgroundNoAnswer');
     return;
   }
-  const connected = Boolean(reply?.connected);
-  $('native-version-row').hidden = !connected;
-  $('native-features-row').hidden = !connected;
-  if (!connected) {
+  if (!reply?.connected) {
+    showRows({ setup: true });
     setStatus('bad', 'notConnected', 'nativeUnavailableDetail');
     return;
   }
-  setStatus('ok', 'connected', 'nativeConnectedDetail');
   $('native-version').textContent = reply.nativeVersion || '?';
+  if (reply.updateNeeded) {
+    showRows({ setup: reply.updateNeeded === 'native', version: true });
+    setStatus('bad', 'statusUpdateNeeded',
+              reply.updateNeeded === 'native' ? 'updateNativeDetail' : 'updateExtensionDetail');
+    return;
+  }
+  const offsets = reply.offsets?.status ?? 'ready';
+  if (OFFSETS_STATES[offsets]) {
+    const [state, label, detail] = OFFSETS_STATES[offsets];
+    showRows({ version: true });
+    setStatus(state, label, detail, [reply.offsets?.chromeVersion || '?']);
+    return;
+  }
+  showRows({ version: true, features: true });
+  setStatus('ok', 'connected', 'nativeConnectedDetail');
   $('native-features').replaceChildren(
     ...Object.entries(reply.features || {}).map(([name, enabled]) => {
       const chip = document.createElement('span');
@@ -257,6 +298,8 @@ async function load() {
   config = withDefaults(stored?.config);
   render();
   void reportNativeStatus();
+  // The module's state changes on its own (offsets arrive, Chrome restarts): keep it live.
+  setInterval(() => void reportNativeStatus(), 3000);
 }
 
 void load();

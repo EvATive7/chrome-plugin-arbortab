@@ -57,9 +57,22 @@ Collapsible subtrees, close-with-children and drag-to-nest — without a sidebar
 ## 🚀 Installation
 
 1. Turn on Chrome's vertical tab strip.
-2. Install the **ArborTab extension**.
-3. Close Chrome, then copy **`version.dll`** next to `chrome.exe`, usually `C:\Program Files\Google\Chrome\Application\` (this needs administrator rights).
+2. Install the **ArborTab extension**. Its settings page shows the next step.
+3. Install the **native module**: press <kbd>Win</kbd>+<kbd>R</kbd> (or open a terminal), paste this command and press Enter. Quit Chrome when the installer asks.
+
+   ```
+   powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/EvATive7/chrome-plugin-arbortab/releases/latest/download/install.ps1 | iex"
+   ```
+
+   The script comes from this repository's latest release. It downloads the matching native package, finds your Chrome, asks for administrator rights only if Chrome is installed for all users, and copies `version.dll` next to `chrome.exe`. Please read the security trade-off below first.
 4. Start Chrome. On the extension's settings page, **Native module** should show **Connected**.
+
+Prefer not to pipe a script into PowerShell? Download `arbortab-native-*-win64.zip` from the release, check it, and double-click `install.cmd` inside.
+
+To remove the module, use the same command with `uninstall.ps1` instead of `install.ps1`, or run `uninstall.cmd` from the package (add `-Purge` to also delete logs and cached data).
+
+> [!TIP]
+> Right after a Chrome update, the settings page may show **Waiting for support** for a day or two: the offsets for the new build are generated automatically once Google publishes its symbols, and the module picks them up without reinstalling.
 
 > [!NOTE]
 > The extension keeps the tree on its own. The native module is what draws it in the strip: indentation, hiding, badges and drop highlights. Without the module, tabs stay flat and unchanged.

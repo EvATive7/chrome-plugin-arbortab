@@ -1,0 +1,39 @@
+name: Release
+
+# Push a tag vX.Y.Z (equal to VERSION and the manifest version) to build a draft release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Check the tag against VERSION
+        run: uv run python -I tools/ci/check_repo.py --tag ${{ github.ref_name }}
+
+      - name: Unit tests
+        run: node --test extension/test/*.test.mjs
+
+      - name: Build version.dll (Release)
+        shell: pwsh
+        run: ./tools/dev/build-native.ps1 -Configuration Release
+
+      - name: Package
+        run: uv run python -I tools/ci/package.py --dll artifacts/native/version.dll --out dist
+
+      # A draft: the release notes and the manual drag check (AGENTS.md) come before publishing.
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: gh release create '${{ github.ref_name }}' dist/* --draft --generate-notes --title "ArborTab ${{ github.ref_name }}"

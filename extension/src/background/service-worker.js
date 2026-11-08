@@ -665,7 +665,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({
       connected: link.isConnected,
       features: link.features,
-      nativeVersion: link.nativeVersion,
+      nativeVersion: link.native?.nativeVersion ?? null,
+      offsets: link.native?.offsets ?? null,
+      updateNeeded: link.updateNeeded,
       port: link.port,
       windows: windows.size,
     });
@@ -678,7 +680,8 @@ chrome.runtime.onStartup.addListener(() => void ensureInit());
 
 // Exposed for the extension's own options page and for sandbox tests.
 globalThis.arbortab = {
-  getState: () => ({ version: stateVersion, config, windows: serializeWindows(), connected: link.isConnected, features: link.features }),
+  getState: () => ({ version: stateVersion, config, windows: serializeWindows(), connected: link.isConnected,
+    features: link.features, native: link.native, updateNeeded: link.updateNeeded }),
   // Sandbox test hook: exercises the same path as a native dropOnto event.
   __testDrop: (targetTabId, zone, draggedTabId) => dropOnto(targetTabId, zone, draggedTabId),
   __testToggle: (tabId) => toggleCollapsed(tabId),

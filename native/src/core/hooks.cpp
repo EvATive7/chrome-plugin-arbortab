@@ -21,11 +21,6 @@ PaintFeature g_paint;
 DragFeature g_drag;
 DecorFeature g_decor;
 
-#ifdef ARBORTAB_BUILD_STAMP
-constexpr const char* kBuildStamp = ARBORTAB_BUILD_STAMP;  // "MM-DD HH:MM"
-#else
-constexpr const char* kBuildStamp = "unknown";
-#endif
 
 }  // namespace
 
@@ -41,7 +36,7 @@ FeatureState InstallFeatureHooks(HMODULE chrome_dll, const Offsets& offsets) {
     return features;
   }
   // tools/dev/dev.py looks for this line to confirm which DLL is running.
-  ARB_INFO("installing features (build %s)", kBuildStamp);
+  ARB_INFO("installing features");
   ResolveChromeApi(chrome_dll, offsets, GlobalApi());
   InitPaint(chrome_dll, offsets);
 
