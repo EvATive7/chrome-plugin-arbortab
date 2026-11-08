@@ -15,6 +15,7 @@
 #include "core/paths.h"
 #include "core/state.h"
 #include "core/ui_thread.h"
+#include "features/drag.h"
 #include "features/layout.h"
 #include "json.hpp"
 
@@ -341,8 +342,13 @@ void HandleMessageUnsafe(Client& client, const std::string& text) {
   }
   if (type == "debug.layout") {
     // Force a layout pass so the snapshot describes the current state, not a stale one.
+    // DescribeLastLayoutJson() opens the snapshot window, so a refresh has to happen after
+    // it: a refresh before the window opens would be recorded as an empty snapshot.
     UiThreadRequestRefresh();
-    Sleep(600);
+    Sleep(300);
+    (void)DescribeLastLayoutJson();
+    UiThreadRequestRefresh();
+    Sleep(400);
     nlohmann::json reply;
     reply["type"] = "debug.layout";
     reply["clients"] = static_cast<int>(GlobalState().ClientCount());
@@ -353,6 +359,9 @@ void HandleMessageUnsafe(Client& client, const std::string& text) {
                       {"horizontalSkips", LayoutHorizontalSkips()},
                       {"emptySkips", LayoutEmptySkips()},
                       {"maxChildren", LayoutMaxChildren()}};
+    reply["stats"]["dropTarget"] = CurrentDropTargetTabId();
+    reply["stats"]["dropZone"] = CurrentDropZone();
+    reply["stats"]["dragging"] = DragInProgress();
     reply["layouts"] = nlohmann::json::parse(DescribeLastLayoutJson(), nullptr, false);
     SendFrame(client, 0x1, reply.dump());
     return;

@@ -48,9 +48,13 @@ const link = new NativeLink({
 function serializeWindows() {
   const payload = {};
   for (const [windowId, state] of windows) {
+    const order = tree.preorder(state);
     payload[windowId] = {
-      order: state.order,
-      nodes: [...state.nodes].map(([tabId, node]) => [tabId, node.parentId, node.collapsed]),
+      order,
+      parents: order
+        .map((tabId) => [tabId, tree.parentOf(state, tabId)])
+        .filter(([, parentId]) => parentId != null),
+      collapsed: order.filter((tabId) => tree.isCollapsed(state, tabId)),
     };
   }
   return payload;
@@ -59,9 +63,15 @@ function serializeWindows() {
 function restoreWindows(payload) {
   windows = new Map();
   for (const [windowId, data] of Object.entries(payload || {})) {
-    const state = tree.createWindowState(data.order || []);
-    for (const [tabId, parentId, collapsed] of data.nodes || []) {
-      state.nodes.set(Number(tabId), { parentId: parentId ?? null, collapsed: Boolean(collapsed) });
+    const order = data.order || [];
+    const state = tree.createWindowState(order);
+    for (const [tabId, parentId] of data.parents || []) {
+      tree.attachAsLastChild(state, Number(tabId), parentId);
+    }
+    // attachAsLastChild appends; the stored pre-order restores the sibling positions.
+    tree.adoptOrder(state, order);
+    for (const tabId of data.collapsed || []) {
+      tree.setCollapsed(state, Number(tabId), true);
     }
     windows.set(Number(windowId), state);
   }
@@ -115,15 +125,12 @@ async function syncWindow(windowId) {
   const liveIds = tabs.map((tab) => tab.id);
   tree.reconcile(state, liveIds);
   for (const tab of tabs) {
-    if (!isTreeTab(tab)) {
+    if (!isTreeTab(tab) && tree.parentOf(state, tab.id) != null) {
       // Pinned tabs and grouped tabs always live at depth 0 with no parent.
-      const node = state.nodes.get(tab.id);
-      if (node && node.parentId != null) {
-        node.parentId = null;
-      }
+      tree.attachAsLastChild(state, tab.id, null);
     }
   }
-  tree.normalize(state);
+  tree.adoptOrder(state, liveIds);
   return state;
 }
 
@@ -198,8 +205,7 @@ async function onCreated(createdTab) {
     ? siblings.find((candidate) => candidate.id === tab.openerTabId)
     : null;
   if (isTreeTab(tab) && opener && isTreeTab(opener)) {
-    tree.setParent(state, tab.id, opener.id);
-    tree.placeAfterSubtree(state, tab.id, opener.id);
+    tree.attachAsLastChild(state, tab.id, opener.id);
     await applyOrder(tab.windowId, state);
   }
   bumpState();
@@ -207,7 +213,7 @@ async function onCreated(createdTab) {
 }
 
 async function applyOrder(windowId, state) {
-  const tabIds = state.order;
+  const tabIds = tree.preorder(state);
   for (let index = 0; index < tabIds.length; index += 1) {
     const tabId = tabIds[index];
     try {
@@ -231,13 +237,7 @@ async function onRemoved(tabId, removeInfo) {
     return;
   }
   const state = stateFor(removeInfo.windowId);
-  state.nodes.delete(tabId);
-  for (const node of state.nodes.values()) {
-    if (node.parentId === tabId) {
-      node.parentId = null;
-    }
-  }
-  state.order = state.order.filter((id) => id !== tabId);
+  tree.removeTab(state, tabId);
   bumpState();
   await saveSession();
 }
@@ -278,21 +278,19 @@ async function onMoved(tabId, moveInfo) {
     return; // the drag handlers decide the parent when the drop finishes
   }
   const state = stateFor(moveInfo.windowId);
-  if (!state.order.includes(tabId)) {
+  if (!tree.preorder(state).includes(tabId)) {
     return;
   }
-  const fromIndex = state.order.indexOf(tabId);
-  let target = moveInfo.toIndex;
-  if (fromIndex !== -1 && fromIndex < target) {
-    target -= 1;
+  // Someone reordered tabs outside the drop protocol: keep every parent relation and
+  // re-derive the sibling order from the strip (PLAN.md section 4.3).
+  const tabs = await chrome.tabs.query({ windowId: moveInfo.windowId });
+  tabs.sort((a, b) => a.index - b.index);
+  const changed = tree.adoptOrder(state, tabs.map((tab) => tab.id));
+  if (changed) {
+    bumpState();
+    await saveSession();
   }
-  state.order.splice(fromIndex, 1);
-  state.order.splice(Math.min(target, state.order.length), 0, tabId);
-  const parentId = tree.inferParentFromIndex(state, tabId, target);
-  tree.setParent(state, tabId, parentId);
-  tree.normalize(state);
-  bumpState();
-  await saveSession();
+  await applyOrder(moveInfo.windowId, state);
 }
 
 async function onActivated(activeInfo) {
@@ -308,20 +306,15 @@ async function onActivated(activeInfo) {
 async function onAttached(tabId, attachInfo) {
   await ensureInit();
   const source = windows.get(attachInfo.fromWindowId) || null;
-  const moved = source ? tree.subtreeIds(source, tabId) : [tabId];
   const target = stateFor(attachInfo.newWindowId);
-  for (const id of moved) {
-    const node = source && source.nodes.get(id);
-    target.nodes.set(id, { parentId: node ? node.parentId : null, collapsed: node ? node.collapsed : false });
-    if (!target.order.includes(id)) {
-      target.order.push(id);
-    }
-    if (source) {
-      source.nodes.delete(id);
-      source.order = source.order.filter((existing) => existing !== id);
-    }
+  // The whole subtree travels: its internal relations move verbatim.
+  const moved = source ? tree.detachSubtree(source, tabId) : { nodes: new Map() };
+  tree.attachSubtreeAsRoot(target, tabId, moved.nodes);
+  await syncWindow(attachInfo.newWindowId);
+  if (source) {
+    await syncWindow(attachInfo.fromWindowId);
   }
-  tree.normalize(target);
+  await applyOrder(attachInfo.newWindowId, target);
   bumpState();
   await saveSession();
 }
@@ -346,13 +339,20 @@ async function onUpdated(tabId, changeInfo, tab) {
     return;
   }
   if (!isTreeTab(tab)) {
-    // Leaving the tree scope promotes children one level (PLAN.md section 3).
-    for (const childId of tree.childIdsOf(state, tabId)) {
-      tree.setParent(state, childId, node.parentId);
-    }
-    node.parentId = null;
+    // Leaving the tree scope (pinned / grouped) promotes the children one level.
+    const parent = tree.parentOf(state, tabId);
+    const children = [...node.children];
+    const list = tree.siblingsOf(state, parent);
+    const index = list.indexOf(tabId);
+    node.children = [];
     node.collapsed = false;
-    tree.normalize(state);
+    tree.detach(state, tabId);
+    const target = tree.siblingsOf(state, parent);
+    target.splice(index < 0 ? target.length : index + 1, 0, ...children);
+    tree.attachAsLastChild(state, tabId, null);
+    const tabs = await chrome.tabs.query({ windowId: tab.windowId });
+    tabs.sort((a, b) => a.index - b.index);
+    tree.adoptOrder(state, tabs.map((candidate) => candidate.id));
     bumpState();
     await saveSession();
   }
@@ -374,7 +374,7 @@ async function handleNativeMessage(message) {
       await onDragEnd();
       break;
     case 'dropOnto':
-      await dropOnto(message.targetTabId);
+      await dropOnto(message.targetTabId, message.zone);
       break;
     default:
       break;
@@ -431,7 +431,7 @@ async function toggleCollapsed(tabId) {
   await saveSession();
 }
 
-async function dropOnto(targetTabId) {
+async function dropOnto(targetTabId, zone = 'nest') {
   const target = await chrome.tabs.get(targetTabId).catch(() => null);
   if (!target) {
     return;
@@ -441,14 +441,16 @@ async function dropOnto(targetTabId) {
     return;
   }
   const state = stateFor(target.windowId);
-  const subtree = tree.subtreeIds(state, activeTab.id);
-  tree.setParent(state, activeTab.id, targetTabId);
-  for (const id of subtree) {
-    if (!state.order.includes(id)) {
-      state.order.push(id);
-    }
+  if (tree.subtreeIds(state, activeTab.id).includes(targetTabId)) {
+    return; // dropping a parent onto its own descendant would create a cycle
   }
-  tree.normalize(state);
+  if (zone === 'before' || zone === 'after') {
+    // Edge drop: a sibling reorder, the parent does not change.
+    tree.insertSibling(state, activeTab.id, targetTabId, zone);
+  } else {
+    // Middle drop: become the target's last child (PLAN.md section 3).
+    tree.attachAsLastChild(state, activeTab.id, targetTabId);
+  }
   await applyOrder(target.windowId, state);
   bumpState();
   await saveSession();
@@ -487,8 +489,8 @@ async function commandOutdent() {
   if (parent == null) {
     return;
   }
-  tree.setParent(state, tab.id, tree.parentOf(state, parent));
-  tree.normalize(state);
+  // Promote one level: become the parent's next sibling.
+  tree.insertSibling(state, tab.id, parent, 'after');
   await applyOrder(tab.windowId, state);
   bumpState();
   await saveSession();
@@ -500,13 +502,13 @@ async function commandIndent() {
     return;
   }
   const state = stateFor(tab.windowId);
-  const index = state.order.indexOf(tab.id);
-  const previous = state.order[index - 1];
+  const siblings = tree.siblingsOf(state, tree.parentOf(state, tab.id));
+  const index = siblings.indexOf(tab.id);
+  const previous = index > 0 ? siblings[index - 1] : null;
   if (previous == null) {
     return;
   }
-  tree.setParent(state, tab.id, previous);
-  tree.normalize(state);
+  tree.attachAsLastChild(state, tab.id, previous);
   await applyOrder(tab.windowId, state);
   bumpState();
   await saveSession();
@@ -603,7 +605,7 @@ chrome.runtime.onStartup.addListener(() => void ensureInit());
 globalThis.arbortab = {
   getState: () => ({ version: stateVersion, config, windows: serializeWindows(), connected: link.isConnected, features: link.features }),
   // Sandbox test hook: exercises the same path as a native dropOnto event.
-  __testDrop: (targetTabId) => dropOnto(targetTabId),
+  __testDrop: (targetTabId, zone) => dropOnto(targetTabId, zone),
   __testDragBegin: onDragBegin,
   __testDragEnd: onDragEnd,
   closeTree: async (tabId) => {

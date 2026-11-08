@@ -30,6 +30,7 @@ DragOffsets g_offsets;
 std::atomic<bool> g_dragging{false};
 void* g_drop_target_view = nullptr;
 int g_drop_target_tab = 0;
+int g_drop_zone = 0;  // 0 = none, 1 = nest (middle), 2 = before (top edge), 3 = after (bottom)
 void* g_previous_highlight = nullptr;
 volatile LONG g_drag_begins = 0;
 volatile LONG g_drops = 0;
@@ -58,20 +59,26 @@ Rect BoundsOf(const void* view) {
               ReadInt(bytes + g_offsets.view_bounds + 12)};
 }
 
-bool Intersects(const Rect& a, const Rect& b) {
-  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-}
+constexpr int kZoneNone = 0;
+constexpr int kZoneNest = 1;
+constexpr int kZoneBefore = 2;
+constexpr int kZoneAfter = 3;
 
 // POD result so the search can live inside __try without C++ objects.
 struct DropHit {
   void* view;
   int tab_id;
+  int zone;
 };
 
-// Finds the tab whose middle band contains the dragged tab's centre. The dragged tab itself is
-// skipped by dropping candidates that overlap the dragged rectangle.
-DropHit FindDropTarget(void* container, Rect dragged) {
-  DropHit hit{nullptr, 0};
+// Finds the tab under the pointer and the drop zone it belongs to. Using the pointer rather
+// than the dragged rectangle is important: while hovering a destination, that rectangle
+// necessarily overlaps the destination and therefore cannot be used to distinguish the two.
+//
+// Zones (PLAN.md section 3): the middle half nests, the outer quarters reorder among
+// siblings.
+DropHit FindDropTarget(void* container, int32_t pointer_y) {
+  DropHit hit{nullptr, 0, kZoneNone};
   if (!g_offsets.container_host_view || !g_offsets.view_children) {
     return hit;
   }
@@ -91,7 +98,6 @@ DropHit FindDropTarget(void* container, Rect dragged) {
   }
 
   ChromeApi& api = GlobalApi();
-  const int32_t centre_y = dragged.y + dragged.height / 2;
   for (uintptr_t index = 0; index < count; ++index) {
     void* child = begin[index];
     if (!child || !api.IsTabView(child)) {
@@ -105,12 +111,9 @@ DropHit FindDropTarget(void* container, Rect dragged) {
     if (bounds.width <= 0 || bounds.height <= 0) {
       continue;
     }
-    if (Intersects(bounds, dragged)) {
-      continue;  // the dragged tab is drawn at the pointer
-    }
     const int32_t band_top = bounds.y + bounds.height / 4;
     const int32_t band_bottom = bounds.y + (bounds.height * 3) / 4;
-    if (centre_y < band_top || centre_y > band_bottom) {
+    if (pointer_y < bounds.y || pointer_y > bounds.y + bounds.height) {
       continue;
     }
     const int tab_id = api.TabIdOf(child);
@@ -119,6 +122,8 @@ DropHit FindDropTarget(void* container, Rect dragged) {
     }
     hit.view = child;
     hit.tab_id = tab_id;
+    hit.zone = pointer_y < band_top ? kZoneBefore
+                                    : (pointer_y > band_bottom ? kZoneAfter : kZoneNest);
     break;
   }
   return hit;
@@ -136,21 +141,20 @@ void Repaint(void* view) {
 using HandleDragFn = void (*)(void* self, const void* dragged_bounds, const void* point);
 
 // SEH needs a function without C++ objects, hence the POD-only helper.
-DropHit SafeFindDropTarget(void* container, const void* dragged_bounds) {
-  DropHit hit{nullptr, 0};
+DropHit SafeFindDropTarget(void* container, const void* point) {
+  DropHit hit{nullptr, 0, kZoneNone};
   __try {
-    // gfx::Rect and views::View::bounds_ share the same {x, y, width, height} layout.
-    const Rect dragged = BoundsOf(dragged_bounds);
-    hit = FindDropTarget(container, dragged);
+    // gfx::Point is two consecutive ints. It is already in host-view coordinates.
+    const int32_t pointer_y = ReadInt(static_cast<const uint8_t*>(point) + sizeof(int32_t));
+    hit = FindDropTarget(container, pointer_y);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
-    hit = DropHit{nullptr, 0};
+    hit = DropHit{nullptr, 0, kZoneNone};
   }
   return hit;
 }
 
 void HookHandleTabDragInContainer(void* self, const void* dragged_bounds, const void* point) {
-  (void)point;
-  const DropHit hit = SafeFindDropTarget(self, dragged_bounds);
+  const DropHit hit = SafeFindDropTarget(self, point);
 
   if (!g_dragging.exchange(true)) {
     InterlockedIncrement(&g_drag_begins);
@@ -158,19 +162,21 @@ void HookHandleTabDragInContainer(void* self, const void* dragged_bounds, const 
     BroadcastJson("{\"type\":\"dragBegin\"}");
   }
 
-  if (hit.view != g_drop_target_view) {
+  if (hit.view != g_drop_target_view || hit.zone != g_drop_zone) {
     void* previous = g_drop_target_view;
     g_drop_target_view = hit.view;
     g_drop_target_tab = hit.tab_id;
+    g_drop_zone = hit.zone;
     Repaint(previous);
     Repaint(hit.view);
     if (hit.tab_id) {
-      ARB_DEBUG("drop target is tab %d", hit.tab_id);
+      ARB_DEBUG("drop target is tab %d zone %d", hit.tab_id, hit.zone);
     }
   }
 
-  if (hit.view) {
-    // Swallow the move: the native code would reorder the strip, we want nesting instead.
+  if (hit.view && hit.zone != kZoneNone) {
+    // Swallow the move: Chrome would reorder the strip itself, which loses the parent
+    // relation. The extension performs the move after the drop instead.
     return;
   }
   reinterpret_cast<HandleDragFn>(g_feature.handle_original)(self, dragged_bounds, point);
@@ -182,16 +188,20 @@ using EndDragFn = void (*)(void* self, int reason);
 void HookEndDrag(void* self, int reason) {
   const bool was_dragging = g_dragging.exchange(false);
   const int target = g_drop_target_tab;
+  const int zone = g_drop_zone;
   void* target_view = g_drop_target_view;
   g_drop_target_tab = 0;
   g_drop_target_view = nullptr;
+  g_drop_zone = kZoneNone;
 
   if (was_dragging) {
     const bool cancelled = reason != 0;  // EndDragReason::kComplete == 0
-    if (target && !cancelled) {
+    if (target && !cancelled && zone != kZoneNone) {
       InterlockedIncrement(&g_drops);
-      ARB_INFO("dropped onto tab %d", target);
-      BroadcastJson("{\"type\":\"dropOnto\",\"targetTabId\":" + std::to_string(target) + "}");
+      const char* zone_name = zone == kZoneNest ? "nest" : (zone == kZoneBefore ? "before" : "after");
+      ARB_INFO("dropped onto tab %d (%s)", target, zone_name);
+      BroadcastJson(std::string("{\"type\":\"dropOnto\",\"targetTabId\":") +
+                    std::to_string(target) + ",\"zone\":\"" + zone_name + "\"}");
     }
     BroadcastJson(std::string("{\"type\":\"dragEnd\",\"cancelled\":") +
                   (cancelled ? "true}" : "false}"));
@@ -211,7 +221,7 @@ bool PrologueMatches(uint8_t* base, const FunctionEntry& entry) {
 }  // namespace
 
 void PaintDropTarget(void* tab_view, void* canvas) {
-  if (!tab_view || tab_view != g_drop_target_view) {
+  if (!tab_view || tab_view != g_drop_target_view || g_drop_zone == kZoneNone) {
     return;
   }
   ChromeApi& api = GlobalApi();
@@ -223,13 +233,24 @@ void PaintDropTarget(void* tab_view, void* canvas) {
     return;
   }
   const DisplayConfig config = GlobalState().Config();
-  // A translucent overlay marks the tab the drop would nest under.
-  int32_t rect[4] = {0, 0, bounds.width, bounds.height};
   using FillRectFn = void (*)(void*, const void*, uint32_t);
-  reinterpret_cast<FillRectFn>(api.fill_rect)(canvas, rect, config.highlight_color);
+  auto fill = reinterpret_cast<FillRectFn>(api.fill_rect);
+  if (g_drop_zone == kZoneNest) {
+    // A translucent overlay marks the tab the drop would nest under.
+    int32_t rect[4] = {0, 0, bounds.width, bounds.height};
+    fill(canvas, rect, config.highlight_color);
+    return;
+  }
+  // An edge drop reorders siblings: mark it with a thin insertion line.
+  const int32_t thickness = 3;
+  int32_t line[4] = {0, g_drop_zone == kZoneBefore ? 0 : bounds.height - thickness,
+                     bounds.width, thickness};
+  fill(canvas, line, config.highlight_color);
 }
 
 int CurrentDropTargetTabId() { return g_drop_target_tab; }
+
+int CurrentDropZone() { return g_drop_zone; }
 
 bool DragInProgress() { return g_dragging.load(); }
 

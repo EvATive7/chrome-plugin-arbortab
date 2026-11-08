@@ -1,46 +1,57 @@
-# M5 drag & drop notes (2026-11-08)
+# M5 notes — drag & drop (rewritten 2026-11-08)
 
-## Implemented
+## Model change
 
-- **F4 drop detection** (`features/drag.cpp`): detours
-  `DraggedTabsContainer::HandleTabDragInContainer`. The dragged rectangle is hit-tested against
-  the host view's children: only TabViews count, the dragged view itself is skipped by
-  overlap, and a candidate matches when the drag centre falls inside its middle half
-  (`[y + h/4, y + 3h/4]`, PLAN.md §3). On a match the original handler is *not* called, so
-  Chrome's own "cross the midline and reorder" behaviour is suppressed.
-- **F5 drag end**: detours `TabDragHandlerImpl::EndDrag(EndDragReason)`. `kComplete` (0) with a
-  drop target sends `dropOnto {targetTabId}`, every other reason counts as cancelled; both
-  paths send `dragEnd {cancelled}` and clear the state.
-- **F6 highlight**: the existing `TabView::OnPaint` detour fills the drop target with
-  `config.highlightColor` (default `#663D7EFF`).
-- Extension: `dragBegin` temporarily collapses an expanded parent so only that tab travels
-  (restored on `dragEnd`); `dropOnto` reparents the active tab and moves its subtree to the end
-  of the target's subtree.
+The tree is now an **ordered tree**; the strip order is its pre-order walk and is never stored.
 
-## Verified automatically (`scripts/e2e_drag.py`)
+```js
+state = { roots: [tabId...], nodes: Map<tabId, { children: [tabId...], collapsed }> }
+```
 
-| check | result |
+Consequences:
+
+- no `order` array, no `normalize()`, no `inferParentFromIndex()` — the old “let Chrome reorder,
+  then reverse-engineer the parent from the drop index” path is gone (it is what produced the
+  scrambled trees users saw);
+- exactly two structural operations, both applied by the extension: re-parent
+  (`attachAsLastChild`) and reorder among siblings (`insertSibling`);
+- `tabs.onMoved` outside a drag now only re-derives sibling order (`adoptOrder`) and keeps every
+  parent relation, then `tabs.move` restores the pre-order.
+
+## Native side (`features/drag.cpp`)
+
+| | |
 |---|---|
-| the new parent has two children | PASS |
-| the outsider is top level | PASS |
-| dragging a parent temporarily collapses it | PASS |
-| the temporary collapse is undone on drag end | PASS |
-| dropped tab became a child of the target | PASS |
-| dropped tab sits after the target's existing subtree | PASS |
-| browser still healthy | PASS |
+| F4 detection | detours `DraggedTabsContainer::HandleTabDragInContainer`. Hit-tests the **pointer**
+  against the host view's `TabView` children (the dragged rectangle overlaps the destination, so
+  it cannot be used), and classifies the zone: middle half = `nest`, top quarter = `before`,
+  bottom quarter = `after`. On any hit the original handler is **not** called, so Chrome never
+  reorders the strip behind our back. |
+| F5 drop end | detours `TabDragHandlerImpl::EndDrag`. `kComplete` + a zone → `dropOnto {targetTabId,
+  zone}`; everything else → `dragEnd {cancelled: true}`. |
+| F6 highlight | `TabView::OnPaint` fills the row for `nest`, and draws a 3 px insertion line at the
+  top/bottom edge for `before` / `after`. |
 
-These exercise everything downstream of the native drop detection through the same entry
-points the protocol uses (`arbortab.__testDrop`, `__testDragBegin`, `__testDragEnd`).
+`debug.layout` also reports `stats.dropTarget` / `stats.dropZone` so the detection can be observed
+without a screenshot.
 
-## Still needs a manual drag
+## Extension side
 
-`HandleTabDragInContainer` only runs while the mouse is really dragging a tab, so the
-detection itself (middle-band hit test, highlight, suppressing the native reorder) has to be
-checked by hand in the sandbox:
+- `dropOnto(targetTabId, zone)`: `nest` → become the target's last child; `before`/`after` →
+  become the target's sibling at that position (parent unchanged). Dropping a parent onto its own
+  descendant is refused.
+- `dragBegin` temporarily collapses the dragged parent, `dragEnd` restores it.
+- `__testDrop(targetTabId, zone)` exercises the same path from the sandbox.
 
-1. drag tab B and hold it over the **middle** of tab A → A must highlight (translucent
-   overlay) and no reordering animation should start;
-2. release → B (and its subtree) becomes the last child of A;
-3. drag over the **top or bottom quarter** of a tab → no highlight, the native reorder happens
-   and the extension infers the parent from the drop index;
-4. press Esc mid-drag → `dragEnd {cancelled: true}`, nothing changes.
+## Verification status
+
+Automated (`node --test extension/test/tree.test.mjs`, `scripts/e2e_drag.py`, `scripts/e2e.py m3`)
+covers the tree model and every downstream path of the protocol.
+
+The **native detection itself still needs one manual drag per zone** (synthetic mouse input cannot
+reach Chrome's UI in this environment):
+
+1. drag onto the middle of another tab → row highlighted, release → nested as last child;
+2. drag onto the top/bottom quarter → insertion line, release → sibling reorder, parent unchanged;
+3. Esc mid-drag → nothing changes;
+4. drag an expanded parent → subtree hides while dragging, travels with the parent on drop.

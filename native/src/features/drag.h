@@ -22,6 +22,7 @@ void PaintDropTarget(void* tab_view, void* canvas);
 
 // Diagnostics.
 int CurrentDropTargetTabId();
+int CurrentDropZone();  // 0 none, 1 nest, 2 before, 3 after
 bool DragInProgress();
 
 }  // namespace arbortab

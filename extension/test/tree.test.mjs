@@ -1,4 +1,7 @@
-// Unit tests for the pure tree model: node --test extension/test
+// Unit tests for the pure ordered-tree model: node --test extension/test
+//
+// The model stores only relations: an ordered root list plus an ordered child list per node.
+// The strip order is always the pre-order walk, never stored.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as tree from '../src/background/tree.js';
@@ -6,30 +9,46 @@ import * as tree from '../src/background/tree.js';
 function build(order, parents = {}) {
   const state = tree.createWindowState(order);
   for (const [tabId, parentId] of Object.entries(parents)) {
-    state.nodes.set(Number(tabId), { parentId, collapsed: false });
+    tree.attachAsLastChild(state, Number(tabId), parentId);
   }
+  tree.adoptOrder(state, order);
   return state;
 }
 
-test('depthOf follows the parent chain', () => {
-  const state = build([1, 2, 3, 4], { 2: 1, 3: 2 });
+test('preorder is the strip order', () => {
+  const state = build([1, 2, 3, 4, 5], { 2: 1, 3: 1, 4: 3 });
+  assert.deepEqual(tree.preorder(state), [1, 2, 3, 4, 5]);
   assert.equal(tree.depthOf(state, 1), 0);
   assert.equal(tree.depthOf(state, 2), 1);
-  assert.equal(tree.depthOf(state, 3), 2);
-  assert.equal(tree.depthOf(state, 4), 0);
+  assert.equal(tree.depthOf(state, 4), 2);
 });
 
-test('setParent refuses cycles', () => {
+test('attachAsLastChild appends and refuses cycles', () => {
   const state = build([1, 2, 3], { 2: 1, 3: 2 });
-  assert.equal(tree.setParent(state, 1, 3), false);
-  assert.equal(tree.setParent(state, 1, 1), false);
+  tree.attachAsLastChild(state, 5, 1);
+  assert.deepEqual(tree.childIdsOf(state, 1), [2, 5]);
+  assert.equal(tree.parentOf(state, 5), 1);
+  assert.equal(tree.attachAsLastChild(state, 1, 3), false);
+  assert.equal(tree.attachAsLastChild(state, 1, 1), false);
   assert.equal(tree.parentOf(state, 1), null);
 });
 
-test('subtreeIds stays in strip order and includes the root', () => {
+test('insertSibling reorders without changing the parent', () => {
+  const state = build([1, 2, 3, 4], { 3: 1, 4: 1 });
+  // "4" goes before "3": still a child of 1.
+  tree.insertSibling(state, 4, 3, 'before');
+  assert.deepEqual(tree.childIdsOf(state, 1), [4, 3]);
+  assert.equal(tree.parentOf(state, 4), 1);
+  // A root moves next to another root.
+  tree.insertSibling(state, 2, 1, 'before');
+  assert.deepEqual(state.roots, [2, 1]);
+  assert.equal(tree.parentOf(state, 2), null);
+});
+
+test('subtreeIds is contiguous in strip order', () => {
   const state = build([1, 2, 3, 4, 5], { 2: 1, 3: 1, 4: 2 });
-  assert.deepEqual(tree.subtreeIds(state, 1), [1, 2, 3, 4]);
-  assert.deepEqual(tree.descendantsOf(state, 1), [2, 3, 4]);
+  assert.deepEqual(tree.subtreeIds(state, 1), [1, 2, 4, 3]);
+  assert.deepEqual(tree.descendantsOf(state, 1), [2, 4, 3]);
   assert.deepEqual(tree.subtreeIds(state, 5), [5]);
 });
 
@@ -40,37 +59,43 @@ test('collapsed ancestors hide descendants', () => {
   assert.equal(tree.isHidden(state, 3), true);
   assert.equal(tree.isHidden(state, 1), false);
   assert.equal(tree.hiddenCount(state, 1), 2);
-  const expanded = tree.expandAncestors(state, 3);
-  assert.deepEqual(expanded, [1]);
+  assert.deepEqual(tree.expandAncestors(state, 3), [1]);
   assert.equal(tree.isHidden(state, 3), false);
 });
 
-test('normalize keeps subtrees contiguous after their parent', () => {
-  const state = build([3, 1, 2, 4], { 2: 1, 3: 2 });
-  tree.normalize(state);
-  assert.deepEqual(state.order, [1, 2, 3, 4]);
+test('removeTab promotes the children into its slot', () => {
+  const state = build([1, 2, 3, 4], { 2: 1, 3: 2, 4: 2 });
+  tree.removeTab(state, 2);
+  assert.equal(tree.parentOf(state, 3), 1);
+  assert.deepEqual(tree.childIdsOf(state, 1), [3, 4]);
+  assert.deepEqual(tree.preorder(state), [1, 3, 4]);
 });
 
-test('normalize treats orphans as roots', () => {
-  const state = build([1, 2, 3], { 2: 99 });
-  tree.normalize(state);
-  assert.deepEqual(state.order, [1, 2, 3]);
-  assert.equal(tree.parentOf(state, 2), 99);
-  tree.reconcile(state, [1, 2, 3]);
+test('adoptOrder keeps parents and re-derives sibling order', () => {
+  const state = build([1, 2, 3, 4], { 3: 1, 4: 1 });
+  // Chrome reports the children in the opposite order.
+  tree.adoptOrder(state, [1, 4, 3, 2]);
+  assert.deepEqual(tree.childIdsOf(state, 1), [4, 3]);
+  assert.equal(tree.parentOf(state, 3), 1);
   assert.equal(tree.parentOf(state, 2), null);
+  assert.deepEqual(tree.preorder(state), [1, 4, 3, 2]);
 });
 
-test('placeAfterSubtree moves a tab to the end of the anchor subtree', () => {
-  const state = build([1, 5, 2, 3], { 2: 1, 3: 1 });
-  tree.placeAfterSubtree(state, 5, 1);
-  assert.deepEqual(state.order, [1, 2, 3, 5]);
+test('reconcile drops dead tabs and adopts unknown ones', () => {
+  const state = build([1, 2, 3], { 2: 1, 3: 1 });
+  tree.reconcile(state, [1, 3, 4]);
+  assert.equal(state.nodes.has(2), false);
+  assert.deepEqual(tree.preorder(state), [1, 3, 4]);
 });
 
-test('inferParentFromIndex derives the parent from the neighbour below', () => {
-  const state = build([1, 2, 3], { 2: 1 });
-  // Dropping "3" at index 1 puts it right after 1 and before 2, which is depth 1 under 1.
-  assert.equal(tree.inferParentFromIndex(state, 3, 1), tree.parentOf(state, 2));
-  assert.equal(tree.inferParentFromIndex(state, 3, 0), tree.parentOf(state, 1));
+test('detached subtrees can move to another window', () => {
+  const source = build([1, 2, 3], { 2: 1, 3: 2 });
+  const target = tree.createWindowState([9]);
+  const moved = tree.detachSubtree(source, 1);
+  tree.attachSubtreeAsRoot(target, 1, moved.nodes);
+  assert.deepEqual(tree.preorder(source), []);
+  assert.deepEqual(tree.preorder(target), [9, 1, 2, 3]);
+  assert.equal(tree.parentOf(target, 3), 2);
 });
 
 test('displayState reports depth, hidden flags and child counts', () => {
@@ -83,11 +108,4 @@ test('displayState reports depth, hidden flags and child counts', () => {
   assert.equal(display.tabs[1].hiddenCount, 2);
   assert.equal(display.tabs[2].hidden, true);
   assert.equal(display.tabs[2].depth, 1);
-});
-
-test('reconcile drops dead tabs and adopts unknown ones', () => {
-  const state = build([1, 2, 3], { 2: 1, 3: 1 });
-  tree.reconcile(state, [1, 3, 4]);
-  assert.equal(state.nodes.has(2), false);
-  assert.deepEqual(state.order, [1, 3, 4]);
 });
