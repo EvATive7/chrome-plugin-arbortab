@@ -158,7 +158,7 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
 
 - Windows x64，VS 2022 Build Tools（MSVC，`vcvars64.bat`）、Windows SDK、cmake + Ninja、uv、node；崩溃分析要用 Windows SDK 的 Debugging Tools（cdb）。
 - **本机信息**（沙盒路径、本地 PDB 缓存、工具链的具体位置和版本）写在根目录的 `AGENTS.md.local`。它被 gitignore、不提交，`CLAUDE.md` 会一并引用；换机器时参照本节自建一份。
-- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。该版本全部 RVA/偏移见 `offsets/win64/s1/B2C7C3B72F30D3ED4C4C44205044422E1.json`。
+- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。该版本全部 RVA/偏移见 `offsets/win64/s2/B2C7C3B72F30D3ED4C4C44205044422E1.json`。
 
 ### Chromium 源码取用
 
@@ -222,6 +222,8 @@ git sparse-checkout set --no-cone <目录...>
 15. **标签条内部不要调用原生拖拽 handler**：它在每次移动时都改 tab model，触发原生“其他标签让位”的实时重排，接管压不住。
 16. **快捷键：Chrome 会拒绝部分字母组合**（如 `Alt+Shift+KeyW`），可用的组合是 `Alt+Shift+Comma` / `Alt+Shift+Up` / `Alt+Shift+Down`。
 17. **沙盒重启后扩展可能还在跑旧代码**：版本号不变时，Chrome 会沿用缓存的 service worker 脚本，`Extensions.loadUnpacked` 同一路径也不会刷新。改了扩展代码后，先在 service worker 里执行 `chrome.runtime.reload()` 再测；否则测试可能对着旧代码通过。
+18. **spec 加了 DLL 依赖的条目却没升 schema，旧文件会被“合法地”接受**：schema 1 时期发布的 156 文件缺少后来加的字段，新 DLL 照样加载，结果 layout/twisty 静默关闭；本机缓存是新生成的，开发时完全看不出来。已因此升到 schema 2。改 spec 时按“偏移量”一节判断是否升号，并用一次真实下载（删掉本地缓存）验证。
+19. **签名要覆盖 git 存储的字节**：Windows runner 默认 `core.autocrlf=true`，签的是 CRLF 的工作区副本，GitHub 发的却是 LF，于是全部验签失败。offsets 工作流已关掉 autocrlf，分支上有 `* -text`；在本机操作 offsets 分支时同样用 `git -c core.autocrlf=false`。另外 raw.githubusercontent.com 有约 5 分钟缓存，刚推送的文件要等一会儿才能下到。
 
 ## 符号与偏移核对经验
 

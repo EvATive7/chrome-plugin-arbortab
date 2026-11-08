@@ -1,6 +1,6 @@
 # Offsets schema: must equal kOffsetsSchema (native/src/core/offsets.h). Bump both when the
 # module starts to depend on entries older files lack; see AGENTS.md ("偏移量").
-schema: 1
+schema: 2
 platform: win64
 functions:
   UnpinnedTabContainerViewLayout::CalculateProposedLayout:

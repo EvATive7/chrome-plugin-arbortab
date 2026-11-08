@@ -14,7 +14,7 @@ enum class FetchResult {
   kRejected,  // a mirror served it, but unsigned or with a bad signature
 };
 
-// Downloads `name` (a path below the offsets branch root, e.g. "win64/s1/<key>.json") and its
+// Downloads `name` (a path below the offsets branch root, e.g. "win64/s2/<key>.json") and its
 // signature from the mirrors in order, returning the first copy that verifies.
 FetchResult FetchSigned(const std::wstring& name, std::string& body);
 
