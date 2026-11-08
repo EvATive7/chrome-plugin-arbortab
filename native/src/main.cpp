@@ -6,6 +6,8 @@
 #include "core/log.h"
 #include "core/offsets.h"
 #include "core/paths.h"
+#include "core/state.h"
+#include "link/ws_server.h"
 #include "proxy/exports.h"
 
 namespace {
@@ -49,6 +51,17 @@ void OnOffsetsResolved(bool ok, const arbortab::Offsets& offsets, const char* er
   ARB_INFO("features: %s", arbortab::DescribeFeatures(features).c_str());
   if (!features.layout) {
     ARB_WARN("no feature could be enabled; Chrome keeps its native tab strip");
+  }
+  arbortab::ServerFeatures server_features;
+  server_features.layout = features.layout;
+  server_features.twisty = features.twisty;
+  server_features.paint = features.paint;
+  server_features.drag = features.drag;
+  const int port = arbortab::StartWebSocketServer(server_features, kModuleVersion);
+  if (port) {
+    ARB_INFO("extension endpoint ready: ws://127.0.0.1:%d/arbortab", port);
+  } else {
+    ARB_WARN("extension endpoint unavailable; tab tree state cannot be applied");
   }
 }
 

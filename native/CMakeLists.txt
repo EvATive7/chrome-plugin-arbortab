@@ -25,11 +25,16 @@ endif()
 
 set(ARBORTAB_SOURCES
   src/main.cpp
+  src/core/chrome_api.cpp
   src/core/cig.cpp
   src/core/hooks.cpp
   src/core/log.cpp
   src/core/offsets.cpp
   src/core/paths.cpp
+  src/core/state.cpp
+  src/core/ui_thread.cpp
+  src/features/layout.cpp
+  src/link/ws_server.cpp
   src/proxy/exports.cpp
 )
 

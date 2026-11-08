@@ -1,0 +1,54 @@
+// Thread-safe display state shared between the WebSocket thread and the UI thread.
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <mutex>
+#include <string>
+#include <vector>
+
+namespace arbortab {
+
+struct TabDisplayState {
+  int depth = 0;
+  bool hidden = false;
+  bool has_children = false;
+  bool collapsed = false;
+  int hidden_count = 0;
+
+  bool operator==(const TabDisplayState&) const = default;
+};
+
+struct DisplayConfig {
+  int indent = 16;
+  bool show_count = true;
+  uint32_t highlight_color = 0x663D7EFF;
+  int min_tab_width = 48;
+
+  bool operator==(const DisplayConfig&) const = default;
+};
+
+class StateStore {
+ public:
+  // Replaces the full snapshot for one client. Returns true when anything changed.
+  bool ReplaceAll(int client_id, const std::vector<int>& tabs,
+                  const std::map<int, TabDisplayState>& states, const DisplayConfig& config);
+  void RemoveClient(int client_id);
+
+  TabDisplayState Get(int tab_id) const;
+  DisplayConfig Config() const;
+  // Increments on every accepted change so the UI thread can skip redundant refreshes.
+  uint64_t Version() const;
+  size_t ClientCount() const;
+  std::string Describe() const;
+
+ private:
+  mutable std::mutex mutex_;
+  std::map<int, std::map<int, TabDisplayState>> clients_;
+  DisplayConfig config_;
+  uint64_t version_ = 0;
+};
+
+StateStore& GlobalState();
+
+}  // namespace arbortab
