@@ -1,5 +1,7 @@
 #include "features/mouse.h"
 
+#include "features/drag.h"
+
 #include <cstring>
 #include <string>
 
@@ -237,6 +239,7 @@ void HookOnPaint(void* self, void* canvas) {
   reinterpret_cast<OnPaintFn>(g_paint.original)(self, canvas);
   __try {
     DrawCollapseMarker(self, canvas);
+    PaintDropTarget(self, canvas);
   } __except (EXCEPTION_EXECUTE_HANDLER) {
     // Painting must never break the browser.
   }

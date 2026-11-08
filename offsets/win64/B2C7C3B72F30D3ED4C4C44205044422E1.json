@@ -3,7 +3,7 @@
   "chromeVersion": "156.0.8078.80",
   "pdbName": "chrome.dll.pdb",
   "pdbKey": "B2C7C3B72F30D3ED4C4C44205044422E1",
-  "generatedAt": "2026-11-08T07:17:30Z",
+  "generatedAt": "2026-11-08T08:04:11Z",
   "functions": {
     "UnpinnedTabContainerViewLayout::CalculateProposedLayout": {
       "rva": "0x0993c680",
@@ -140,6 +140,8 @@
     "ui::LocatedEvent.location_": "0xb0",
     "views::LayoutManagerBase.host_view_": "0x38",
     "views::View.bounds_": "0x1c8",
+    "views::View.children_": "0x1a0",
+    "views::View.visible_": "0x1d8",
     "views::ProposedLayout.host_size": "0x0",
     "views::ProposedLayout.child_layouts": "0x8",
     "views::ChildLayout.child_view": "0x0",

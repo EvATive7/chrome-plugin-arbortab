@@ -75,6 +75,8 @@ fields:
   ui::LocatedEvent.location_: [ui::LocatedEvent, location_]
   views::LayoutManagerBase.host_view_: [views::LayoutManagerBase, host_view_]
   views::View.bounds_: [views::View, bounds_]
+  views::View.children_: [views::View, children_]
+  views::View.visible_: [views::View, visible_]
   views::ProposedLayout.host_size: [views::ProposedLayout, host_size]
   views::ProposedLayout.child_layouts: [views::ProposedLayout, child_layouts]
   views::ChildLayout.child_view: [views::ChildLayout, child_view]

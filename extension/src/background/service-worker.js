@@ -18,6 +18,8 @@ const SESSION_KEY = 'arbortab.windows';
 let windows = new Map();
 let config = { ...DEFAULT_CONFIG };
 let dragActive = false;
+/** Tab that was collapsed only for the duration of a drag (PLAN.md §3: drag a parent alone). */
+let dragTemporarilyCollapsed = null;
 let stateVersion = 0;
 let lastSentVersion = -1;
 let sendTimer = null;
@@ -366,10 +368,10 @@ async function handleNativeMessage(message) {
       await toggleCollapsed(message.tabId);
       break;
     case 'dragBegin':
-      dragActive = true;
+      await onDragBegin();
       break;
     case 'dragEnd':
-      dragActive = false;
+      await onDragEnd();
       break;
     case 'dropOnto':
       await dropOnto(message.targetTabId);
@@ -377,6 +379,42 @@ async function handleNativeMessage(message) {
     default:
       break;
   }
+}
+
+// While a parent is dragged only the parent itself should move, so its subtree is hidden.
+async function onDragBegin() {
+  dragActive = true;
+  const tab = await activeTab();
+  if (!tab) {
+    return;
+  }
+  const state = stateFor(tab.windowId);
+  const children = tree.childIdsOf(state, tab.id);
+  if (!children.length) {
+    return;
+  }
+  if (!tree.isCollapsed(state, tab.id)) {
+    dragTemporarilyCollapsed = tab.id;
+    tree.setCollapsed(state, tab.id, true);
+    bumpState();
+  }
+}
+
+async function onDragEnd() {
+  dragActive = false;
+  if (dragTemporarilyCollapsed == null) {
+    return;
+  }
+  const tab = await chrome.tabs.get(dragTemporarilyCollapsed).catch(() => null);
+  const tabId = dragTemporarilyCollapsed;
+  dragTemporarilyCollapsed = null;
+  if (!tab) {
+    return;
+  }
+  const state = stateFor(tab.windowId);
+  tree.setCollapsed(state, tabId, false);
+  bumpState();
+  await saveSession();
 }
 
 async function toggleCollapsed(tabId) {
@@ -564,6 +602,10 @@ chrome.runtime.onStartup.addListener(() => void ensureInit());
 // Exposed for the extension's own options page and for sandbox tests.
 globalThis.arbortab = {
   getState: () => ({ version: stateVersion, config, windows: serializeWindows(), connected: link.isConnected, features: link.features }),
+  // Sandbox test hook: exercises the same path as a native dropOnto event.
+  __testDrop: (targetTabId) => dropOnto(targetTabId),
+  __testDragBegin: onDragBegin,
+  __testDragEnd: onDragEnd,
   closeTree: async (tabId) => {
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     if (tab) {

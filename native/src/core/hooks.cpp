@@ -7,6 +7,7 @@
 #include "core/log.h"
 #include "core/offsets.h"
 #include "features/layout.h"
+#include "features/drag.h"
 #include "features/mouse.h"
 
 namespace arbortab {
@@ -15,6 +16,7 @@ namespace {
 LayoutFeature g_layout;
 MouseFeature g_mouse;
 PaintFeature g_paint;
+DragFeature g_drag;
 
 }  // namespace
 
@@ -34,7 +36,7 @@ FeatureState InstallFeatureHooks(HMODULE chrome_dll, const Offsets& offsets) {
   features.layout = InstallLayoutFeature(chrome_dll, offsets, g_layout);
   features.twisty = InstallMouseFeature(chrome_dll, offsets, g_mouse);
   features.paint = InstallPaintFeature(chrome_dll, offsets, g_paint);
-  // M5 (drag) installs its hooks here.
+  features.drag = InstallDragFeature(chrome_dll, offsets, g_drag);
   return features;
 }
 

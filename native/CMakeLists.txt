@@ -33,6 +33,7 @@ set(ARBORTAB_SOURCES
   src/core/paths.cpp
   src/core/state.cpp
   src/core/ui_thread.cpp
+  src/features/drag.cpp
   src/features/layout.cpp
   src/features/mouse.cpp
   src/link/ws_server.cpp
