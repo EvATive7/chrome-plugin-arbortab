@@ -6,16 +6,21 @@
 
 #include "core/chrome_api.h"
 #include "core/log.h"
+#include "features/anim.h"
 
 namespace arbortab {
 namespace {
 
 constexpr UINT kRefreshMessage = WM_APP + 0x41;
+constexpr UINT_PTR kFrameTimer = 0xA7B0;
+constexpr UINT kFrameIntervalMs = 15;
 constexpr size_t kMaxHostViews = 32;
 
 std::atomic<HWND> g_window{nullptr};
 DWORD g_ui_thread = 0;
 std::atomic<bool> g_creating{false};
+bool g_frame_armed = false;   // UI thread only
+bool g_frame_hosts = false;   // UI thread only
 std::mutex g_mutex;
 // Views can be destroyed at any time (the strip is rebuilt on various Chrome events), and a
 // stale view pointer cannot be validated reliably. Entries are therefore kept fresh by the
@@ -63,7 +68,7 @@ bool RefreshOneHost(const HostEntry& host) {
   }
 }
 
-void RefreshViewsOnUiThread() {
+void RefreshViewsOnUiThread(bool quiet = false) {
   std::vector<HostEntry> hosts;
   {
     std::lock_guard<std::mutex> lock(g_mutex);
@@ -84,6 +89,9 @@ void RefreshViewsOnUiThread() {
       ARB_WARN("refreshing a recorded view faulted; dropping it");
     }
   }
+  if (quiet) {
+    return;
+  }
   const LONG count = InterlockedIncrement(&g_refresh_count);
   ARB_DEBUG("ui refresh #%ld over %zu valid hosts (of %zu recorded)", count, used, hosts.size());
 }
@@ -91,6 +99,18 @@ void RefreshViewsOnUiThread() {
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
   if (message == kRefreshMessage) {
     RefreshViewsOnUiThread();
+    return 0;
+  }
+  if (message == WM_TIMER && wparam == kFrameTimer) {
+    KillTimer(window, kFrameTimer);
+    g_frame_armed = false;
+    const bool hosts = g_frame_hosts;
+    g_frame_hosts = false;
+    // Painting during this tick may request the next frame again.
+    if (hosts) {
+      RefreshViewsOnUiThread(/*quiet=*/true);
+    }
+    RunPendingTabWork();
     return 0;
   }
   return DefWindowProcW(window, message, wparam, lparam);
@@ -175,6 +195,17 @@ void UiThreadRequestRefresh() {
   }
   if (!PostMessageW(window, kRefreshMessage, 0, 0)) {
     ARB_WARN("PostMessage to the UI bridge failed: %lu", GetLastError());
+  }
+}
+
+void UiThreadScheduleFrame(bool hosts) {
+  const HWND window = g_window.load();
+  if (!window || GetCurrentThreadId() != g_ui_thread) {
+    return;
+  }
+  g_frame_hosts |= hosts;
+  if (!g_frame_armed && SetTimer(window, kFrameTimer, kFrameIntervalMs, nullptr)) {
+    g_frame_armed = true;
   }
 }
 

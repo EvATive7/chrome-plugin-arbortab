@@ -3,7 +3,7 @@
   "chromeVersion": "156.0.8078.80",
   "pdbName": "chrome.dll.pdb",
   "pdbKey": "B2C7C3B72F30D3ED4C4C44205044422E1",
-  "generatedAt": "2026-11-08T08:04:11Z",
+  "generatedAt": "2026-11-08T13:01:24Z",
   "functions": {
     "UnpinnedTabContainerViewLayout::CalculateProposedLayout": {
       "rva": "0x0993c680",
@@ -65,6 +65,90 @@
       "rva": "0x047a09d0",
       "prologue": "56 48 83 ec 40 48 89 ce 48 8b 05 61 26 24 0d 48"
     },
+    "views::View::OnPaint": {
+      "rva": "0x004a0a00",
+      "prologue": "56 57 53 48 83 ec 70 48 89 d6 48 89 cf 48 8b 05"
+    },
+    "TabIcon::OnPaint": {
+      "rva": "0x012df890",
+      "prologue": "41 57 41 56 41 54 56 57 53 48 83 ec 68 48 89 d6"
+    },
+    "views::View::GetColorProvider": {
+      "rva": "0x047a07c0",
+      "prologue": "56 57 48 83 ec 78 48 8b 05 73 28 24 0d 48 31 e0"
+    },
+    "ui::ColorProvider::GetColor": {
+      "rva": "0x052b06d0",
+      "prologue": "41 57 41 56 41 54 56 57 55 53 48 83 ec 20 89 d7"
+    },
+    "cc::PaintFlags::PaintFlags": {
+      "rva": "0x059c4510",
+      "prologue": "48 89 c8 0f 10 05 56 c3 4f 0a 0f 11 01 f2 0f 10"
+    },
+    "gfx::Canvas::DrawRoundRect": {
+      "rva": "0x0acfc800",
+      "prologue": "48 83 ec 48 48 8b 05 35 68 ce 06 48 31 e0 48 89"
+    },
+    "gfx::Canvas::DrawLine": {
+      "rva": "0x0acfc420",
+      "prologue": "48 83 ec 38 48 8b 89 c0 00 00 00 f3 41 0f 10 18"
+    },
+    "gfx::Canvas::SaveLayerAlpha": {
+      "rva": "0x0349cb50",
+      "prologue": "0f b6 c2 f3 0f 2a c8 48 8b 89 c0 00 00 00 f3 0f"
+    },
+    "TabView::Layout": {
+      "rva": "0x09936af0",
+      "prologue": "56 57 53 48 83 ec 30 48 8b 05 42 c5 0a 08 48 31"
+    },
+    "views::View::SetBoundsRect": {
+      "rva": "0x04970300",
+      "prologue": "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec e8"
+    },
+    "gfx::Canvas::Save": {
+      "rva": "0x0349cb30",
+      "prologue": "48 8b 89 c0 00 00 00 48 8b 01 48 8b 40 20 48 ff"
+    },
+    "gfx::Canvas::Restore": {
+      "rva": "0x0349cb80",
+      "prologue": "48 8b 89 c0 00 00 00 48 8b 01 48 8b 40 50 48 ff"
+    },
+    "gfx::Canvas::DrawStringRectWithFlags": {
+      "rva": "0x0acfb7c0",
+      "prologue": "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec e8"
+    },
+    "gfx::GetStringWidth": {
+      "rva": "0x015d6110",
+      "prologue": "48 83 ec 38 48 8b 05 25 cf 40 10 48 31 e0 48 89"
+    },
+    "gfx::FontList::GetBaseline": {
+      "rva": "0x00239900",
+      "prologue": "48 8b 09 e9 08 00 00 00 cc cc cc cc cc cc cc cc"
+    },
+    "gfx::FontList::GetCapHeight": {
+      "rva": "0x02fc5070",
+      "prologue": "48 83 ec 28 48 8b 09 e8 34 55 21 fd 48 83 78 08"
+    },
+    "views::View::SetPaintToLayer": {
+      "rva": "0x00f865b0",
+      "prologue": "56 57 48 83 ec 28 89 d7 48 89 ce 80 b9 54 02 00"
+    },
+    "views::View::DestroyLayer": {
+      "rva": "0x02f9f8f0",
+      "prologue": "c6 81 54 02 00 00 00 80 b9 55 02 00 00 00 75 23"
+    },
+    "ui::Layer::SetOpacity": {
+      "rva": "0x012d88c0",
+      "prologue": "56 57 48 83 ec 38 0f 29 74 24 20 0f 28 f1 48 89"
+    },
+    "gfx::FontList::GetHeight": {
+      "rva": "0x056b5150",
+      "prologue": "41 57 41 56 41 54 56 57 55 53 48 83 ec 20 48 8b"
+    },
+    "gfx::FontList::DeriveWithSizeDelta": {
+      "rva": "0x02fc4f00",
+      "prologue": "41 56 56 57 55 53 48 83 ec 20 44 89 c7 48 89 d6"
+    },
     "gfx::Canvas::FillRect": {
       "rva": "0x019ce590",
       "prologue": "56 48 83 c4 80 48 8b 05 a4 4a 01 10 48 31 e0 48"
@@ -92,6 +176,15 @@
     },
     "TabDragHandlerImpl::EndDrag": {
       "rva": "0x099238b0"
+    },
+    "views::View::OnPaint": {
+      "rva": "0x004a0a00"
+    },
+    "TabIcon::OnPaint": {
+      "rva": "0x012df890"
+    },
+    "TabView::Layout": {
+      "rva": "0x09936af0"
     }
   },
   "vtables": {
@@ -113,6 +206,13 @@
     "tabs::TabModel": [
       "0x0fa01600",
       "0x0fc60d50"
+    ],
+    "TabCollectionAnimatingLayoutManager": [
+      "0x0f9979b0",
+      "0x0f997a70",
+      "0x0f997b20",
+      "0x0f997b50",
+      "0x0f997c00"
     ]
   },
   "vtableSlots": {
@@ -128,6 +228,15 @@
     "TabView.hovered_": "0x61a",
     "TabView.collapsed_": "0x61c",
     "TabView.pinned_": "0x61d",
+    "views::View.parent_": "0x198",
+    "views::View.layout_manager_": "0x210",
+    "TabCollectionAnimatingLayoutManager.animate_host_size_": "0x8a0",
+    "TabCollectionAnimatingLayoutManager.starting_layout_": "0x360",
+    "TabCollectionAnimatingLayoutManager.current_layout_": "0x680",
+    "ui::LayerOwner.layer_": "0x10",
+    "cc::CorePaintFlags.color_": "0x0",
+    "cc::CorePaintFlags.width_": "0x10",
+    "cc::CorePaintFlags.bitfields_": "0x18",
     "UnpinnedTabContainerViewLayout.orientation_": "0x270",
     "DraggedTabsContainer.host_view_": "0x18",
     "DraggedTabsContainer.collection_node_": "0x20",
@@ -149,6 +258,29 @@
     "views::ChildLayout.bounds": "0xc",
     "views::ChildLayout.available_size": "0x1c"
   },
+  "constants": {
+    "ui::kColorSysPrimary": 98,
+    "ui::kColorSysOnSurface": 114,
+    "ui::kColorSysOnSurfaceSubtle": 132,
+    "ui::kColorSysTonalContainer": 135
+  },
+  "bitfields": {
+    "cc::PaintFlags.antialias_": {
+      "bit": 0,
+      "width": 1
+    },
+    "cc::PaintFlags.cap_type_": {
+      "bit": 2,
+      "width": 2
+    },
+    "cc::PaintFlags.style_": {
+      "bit": 6,
+      "width": 2
+    }
+  },
+  "bases": {
+    "views::View>ui::LayerOwner": "0x10"
+  },
   "sizes": {
     "TabView": "0x690",
     "views::LayoutManagerBase": "0x270",
@@ -159,7 +291,12 @@
     "ui::LocatedEvent": "0xc0",
     "views::ProposedLayout": "0x190",
     "views::ChildLayout": "0x30",
-    "views::View": "0x320"
+    "cc::PaintFlags": "0x48",
+    "gfx::FontList": "0x8",
+    "views::View": "0x320",
+    "TabCollectionAnimatingLayoutManager": "0x8a8",
+    "ui::LayerOwner": "0x58",
+    "cc::CorePaintFlags": "0x1c"
   },
   "checks": {
     "ChildLayoutList": "absl::InlinedVector<views::ChildLayout,8>"

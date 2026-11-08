@@ -40,6 +40,66 @@ functions:
   views::View::SchedulePaint:
     hook: false
     symbol: "?SchedulePaint@View@views@@QEAAXXZ"
+  views::View::OnPaint:
+    symbol: "?OnPaint@View@views@@MEAAXPEAVCanvas@gfx@@@Z"
+  TabIcon::OnPaint:
+    symbol: "?OnPaint@TabIcon@@MEAAXPEAVCanvas@gfx@@@Z"
+  views::View::GetColorProvider:
+    hook: false
+    symbol: "?GetColorProvider@View@views@@QEBAPEBVColorProvider@ui@@XZ"
+  ui::ColorProvider::GetColor:
+    hook: false
+    symbol: "?GetColor@ColorProvider@ui@@QEBAIH@Z"
+  cc::PaintFlags::PaintFlags:
+    hook: false
+    symbol: "??0PaintFlags@cc@@QEAA@XZ"
+  gfx::Canvas::DrawRoundRect:
+    hook: false
+    symbol: "?DrawRoundRect@Canvas@gfx@@QEAAXAEBVRectF@2@MAEBVPaintFlags@cc@@@Z"
+  gfx::Canvas::DrawLine:
+    hook: false
+    symbol: "?DrawLine@Canvas@gfx@@QEAAXAEBVPointF@2@0AEBVPaintFlags@cc@@@Z"
+  gfx::Canvas::SaveLayerAlpha:
+    hook: false
+    symbol: "?SaveLayerAlpha@Canvas@gfx@@QEAAXE@Z"
+  TabView::Layout:
+    symbol: "?Layout@TabView@@EEAAXV?$NonCopyablePassKey@VView@views@@@base@@@Z"
+  views::View::SetBoundsRect:
+    hook: false
+    symbol: "?SetBoundsRect@View@views@@QEAAXAEBVRect@gfx@@@Z"
+  gfx::Canvas::Save:
+    hook: false
+    symbol: "?Save@Canvas@gfx@@QEAAXXZ"
+  gfx::Canvas::Restore:
+    hook: false
+    symbol: "?Restore@Canvas@gfx@@QEAAXXZ"
+  gfx::Canvas::DrawStringRectWithFlags:
+    hook: false
+    symbol: "?DrawStringRectWithFlags@Canvas@gfx@@QEAAXV?$basic_string_view@_SU?$char_traits@_S@__Cr@std@@@__Cr@std@@AEBVFontList@2@IAEBVRect@2@H@Z"
+  gfx::GetStringWidth:
+    hook: false
+    symbol: "?GetStringWidth@gfx@@YAHV?$basic_string_view@_SU?$char_traits@_S@__Cr@std@@@__Cr@std@@AEBVFontList@1@@Z"
+  gfx::FontList::GetBaseline:
+    hook: false
+    symbol: "?GetBaseline@FontList@gfx@@QEBAHXZ"
+  gfx::FontList::GetCapHeight:
+    hook: false
+    symbol: "?GetCapHeight@FontList@gfx@@QEBAHXZ"
+  views::View::SetPaintToLayer:
+    hook: false
+    symbol: "?SetPaintToLayer@View@views@@QEAAXW4LayerType@ui@@@Z"
+  views::View::DestroyLayer:
+    hook: false
+    symbol: "?DestroyLayer@View@views@@QEAAXXZ"
+  ui::Layer::SetOpacity:
+    hook: false
+    symbol: "?SetOpacity@Layer@ui@@QEAAXM@Z"
+  gfx::FontList::GetHeight:
+    hook: false
+    symbol: "?GetHeight@FontList@gfx@@QEBAHXZ"
+  gfx::FontList::DeriveWithSizeDelta:
+    hook: false
+    symbol: "?DeriveWithSizeDelta@FontList@gfx@@QEBA?AV12@H@Z"
   gfx::Canvas::FillRect:
     hook: false
     symbol: "?FillRect@Canvas@gfx@@QEAAXAEBVRect@2@I@Z"
@@ -49,6 +109,7 @@ functions:
 vtables:
   TabView: "TabView::`vftable'"
   tabs::TabModel: "tabs::TabModel::`vftable'"
+  TabCollectionAnimatingLayoutManager: "TabCollectionAnimatingLayoutManager::`vftable'"
 vtableSlots:
   tabs::TabModel::GetContents:
     vtable: tabs::TabModel
@@ -63,6 +124,15 @@ fields:
   TabView.hovered_: [TabView, hovered_]
   TabView.collapsed_: [TabView, collapsed_]
   TabView.pinned_: [TabView, pinned_]
+  views::View.parent_: [views::View, parent_]
+  views::View.layout_manager_: [views::View, layout_manager_]
+  TabCollectionAnimatingLayoutManager.animate_host_size_: [TabCollectionAnimatingLayoutManager, animate_host_size_]
+  TabCollectionAnimatingLayoutManager.starting_layout_: [TabCollectionAnimatingLayoutManager, starting_layout_]
+  TabCollectionAnimatingLayoutManager.current_layout_: [TabCollectionAnimatingLayoutManager, current_layout_]
+  ui::LayerOwner.layer_: [ui::LayerOwner, layer_]
+  cc::CorePaintFlags.color_: [cc::CorePaintFlags, color_]
+  cc::CorePaintFlags.width_: [cc::CorePaintFlags, width_]
+  cc::CorePaintFlags.bitfields_: [cc::CorePaintFlags, bitfields_]
   UnpinnedTabContainerViewLayout.orientation_: [UnpinnedTabContainerViewLayout, orientation_]
   DraggedTabsContainer.host_view_: [DraggedTabsContainer, host_view_]
   DraggedTabsContainer.collection_node_: [DraggedTabsContainer, collection_node_]
@@ -83,6 +153,17 @@ fields:
   views::ChildLayout.visible: [views::ChildLayout, visible]
   views::ChildLayout.bounds: [views::ChildLayout, bounds]
   views::ChildLayout.available_size: [views::ChildLayout, available_size]
+constants:
+  ui::kColorSysPrimary: [ui::ColorIds, kColorSysPrimary]
+  ui::kColorSysOnSurface: [ui::ColorIds, kColorSysOnSurface]
+  ui::kColorSysOnSurfaceSubtle: [ui::ColorIds, kColorSysOnSurfaceSubtle]
+  ui::kColorSysTonalContainer: [ui::ColorIds, kColorSysTonalContainer]
+bases:
+  views::View>ui::LayerOwner: [views::View, ui::LayerOwner]
+bitfields:
+  cc::PaintFlags.antialias_: [cc::CorePaintFlags::PaintFlagsBitfields, antialias_]
+  cc::PaintFlags.cap_type_: [cc::CorePaintFlags::PaintFlagsBitfields, cap_type_]
+  cc::PaintFlags.style_: [cc::CorePaintFlags::PaintFlagsBitfields, style_]
 types:
   TabView: 0x690
   views::LayoutManagerBase: 0x270
@@ -93,5 +174,7 @@ types:
   ui::LocatedEvent: 0xc0
   views::ProposedLayout: 0x190
   views::ChildLayout: 0x30
+  cc::PaintFlags: 0x48
+  gfx::FontList: 0x8
 checks:
   ChildLayoutList: "absl::InlinedVector<views::ChildLayout,8>"

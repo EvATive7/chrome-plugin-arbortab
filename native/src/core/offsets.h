@@ -18,6 +18,12 @@ struct FunctionEntry {
   uint8_t* Address(uint8_t* module_base) const { return module_base + rva; }
 };
 
+// Position of a bit field inside its storage unit.
+struct BitField {
+  uint32_t bit = 0;
+  uint32_t width = 0;
+};
+
 struct Offsets {
   bool loaded = false;
   int schema = 0;
@@ -30,6 +36,9 @@ struct Offsets {
   std::map<std::string, int> vtable_slots;
   std::map<std::string, uint32_t> fields;
   std::map<std::string, uint32_t> sizes;
+  std::map<std::string, int> constants;  // enumerator values (e.g. ui::ColorIds)
+  std::map<std::string, BitField> bitfields;
+  std::map<std::string, uint32_t> bases;  // "Derived>Base" -> offset of the base subobject
   std::string source;  // "cache" or "download"
 };
 

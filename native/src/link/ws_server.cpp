@@ -324,6 +324,9 @@ void HandleMessageUnsafe(Client& client, const std::string& text) {
       const auto& node = message["config"];
       config.indent = node.value("indent", config.indent);
       config.show_count = node.value("showCount", config.show_count);
+      config.show_guides = node.value("showGuides", config.show_guides);
+      config.animations = node.value("animations", config.animations);
+      // "auto" (or anything that is not #AARRGGBB) follows the browser theme.
       const std::string color = node.value("highlightColor", std::string());
       if (color.size() == 9 && color[0] == '#') {
         try {

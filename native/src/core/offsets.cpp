@@ -216,6 +216,9 @@ bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& er
   const nlohmann::json vtable_slots = object("vtableSlots");
   const nlohmann::json fields = object("fields");
   const nlohmann::json sizes = object("sizes");
+  const nlohmann::json constants = object("constants");
+  const nlohmann::json bitfields = object("bitfields");
+  const nlohmann::json bases = object("bases");
 
   for (const auto& [name, node] : functions.items()) {
       FunctionEntry entry;
@@ -254,6 +257,19 @@ bool LoadOffsetsFromFile(const std::wstring& path, Offsets& out, std::string& er
   }
   for (const auto& [name, node] : sizes.items()) {
     parsed.sizes[name] = ParseHex(JsonString(node));
+  }
+  for (const auto& [name, node] : constants.items()) {
+    if (node.is_number_integer()) {
+      parsed.constants[name] = node.get<int>();
+    }
+  }
+  for (const auto& [name, node] : bases.items()) {
+    parsed.bases[name] = ParseHex(JsonString(node));
+  }
+  for (const auto& [name, node] : bitfields.items()) {
+    if (node.is_object()) {
+      parsed.bitfields[name] = BitField{node.value("bit", 0u), node.value("width", 0u)};
+    }
   }
 
   if (parsed.functions.empty()) {

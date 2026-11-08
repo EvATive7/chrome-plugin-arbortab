@@ -33,9 +33,12 @@ set(ARBORTAB_SOURCES
   src/core/paths.cpp
   src/core/state.cpp
   src/core/ui_thread.cpp
+  src/features/anim.cpp
+  src/features/decor.cpp
   src/features/drag.cpp
   src/features/layout.cpp
   src/features/mouse.cpp
+  src/features/paint.cpp
   src/link/ws_server.cpp
   src/proxy/exports.cpp
 )
@@ -45,6 +48,12 @@ target_include_directories(version PRIVATE src third_party third_party/json)
 # version.dll itself is never linked: every forwarded call goes through GetProcAddress.
 target_link_libraries(version PRIVATE minhook winhttp shlwapi shell32)
 target_compile_definitions(version PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+# Build time written to native.log (core/hooks.cpp), so scripts/dev.py can tell which DLL a
+# running browser loaded. Taken at configure time; scripts/build-native.ps1 reconfigures on
+# every build.
+string(TIMESTAMP ARBORTAB_BUILD_STAMP "%m-%d %H:%M")
+set_source_files_properties(src/core/hooks.cpp PROPERTIES
+  COMPILE_DEFINITIONS "ARBORTAB_BUILD_STAMP=\"${ARBORTAB_BUILD_STAMP}\"")
 if(MSVC)
   target_compile_options(version PRIVATE /W4 /permissive- /Zc:__cplusplus /utf-8 /EHsc)
   # Keep a PDB so crash addresses inside this DLL can be symbolised during development.

@@ -9,6 +9,8 @@
 #include "features/layout.h"
 #include "features/drag.h"
 #include "features/mouse.h"
+#include "features/decor.h"
+#include "features/paint.h"
 
 namespace arbortab {
 namespace {
@@ -17,6 +19,13 @@ LayoutFeature g_layout;
 MouseFeature g_mouse;
 PaintFeature g_paint;
 DragFeature g_drag;
+DecorFeature g_decor;
+
+#ifdef ARBORTAB_BUILD_STAMP
+constexpr const char* kBuildStamp = ARBORTAB_BUILD_STAMP;  // "MM-DD HH:MM"
+#else
+constexpr const char* kBuildStamp = "unknown";
+#endif
 
 }  // namespace
 
@@ -31,12 +40,20 @@ FeatureState InstallFeatureHooks(HMODULE chrome_dll, const Offsets& offsets) {
     ARB_ERROR("MinHook is unavailable; every feature stays off");
     return features;
   }
+  // scripts/dev.py looks for this line to confirm which DLL is running.
+  ARB_INFO("installing features (build %s)", kBuildStamp);
   ResolveChromeApi(chrome_dll, offsets, GlobalApi());
+  InitPaint(chrome_dll, offsets);
 
   features.layout = InstallLayoutFeature(chrome_dll, offsets, g_layout);
   features.twisty = InstallMouseFeature(chrome_dll, offsets, g_mouse);
   features.paint = InstallPaintFeature(chrome_dll, offsets, g_paint);
   features.drag = InstallDragFeature(chrome_dll, offsets, g_drag);
+  // Cosmetic only: the tree works the same without the decorations.
+  if (InstallDecorFeature(chrome_dll, offsets, g_decor)) {
+    ARB_INFO("decorations: guides=%s badge=%s chevron=%s", g_decor.guides ? "on" : "off",
+             g_decor.badge ? "on" : "off", g_decor.chevron ? "on" : "off");
+  }
   return features;
 }
 

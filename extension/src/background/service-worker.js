@@ -5,12 +5,17 @@ import * as tree from './tree.js';
 import { NativeLink } from './native-link.js';
 
 const DEFAULT_CONFIG = {
-  indent: 16,
+  indent: 14,
   confirmThreshold: 0, // close descendants without asking (0 = never ask)
   newTabButtonIsChild: false,
   showCount: true,
-  highlightColor: '#663D7EFF',
+  showGuides: true,
+  animations: true,
+  highlightColor: 'auto', // 'auto' follows the browser theme, otherwise '#AARRGGBB'
 };
+
+// Colours earlier builds stored as their default; they now follow the theme instead.
+const LEGACY_HIGHLIGHT_COLORS = new Set(['#663D7EFF', '#998B5CF6']);
 
 const SESSION_KEY = 'arbortab.windows';
 
@@ -20,6 +25,8 @@ let config = { ...DEFAULT_CONFIG };
 let dragActive = false;
 /** Tab that was collapsed only for the duration of a drag (PLAN.md §3: drag a parent alone). */
 let dragTemporarilyCollapsed = null;
+/** Window of the current drag: its strip order is re-asserted when the drag ends. */
+let dragWindowId = null;
 let stateVersion = 0;
 let lastSentVersion = -1;
 let sendTimer = null;
@@ -98,7 +105,15 @@ async function loadSession() {
 
 async function loadConfig() {
   const stored = await chrome.storage.sync.get('config');
-  config = { ...DEFAULT_CONFIG, ...(stored?.config || {}) };
+  config = withDefaults(stored?.config);
+}
+
+function withDefaults(stored) {
+  const merged = { ...DEFAULT_CONFIG, ...(stored || {}) };
+  if (LEGACY_HIGHLIGHT_COLORS.has(String(merged.highlightColor).toUpperCase())) {
+    merged.highlightColor = DEFAULT_CONFIG.highlightColor;
+  }
+  return merged;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -112,6 +127,14 @@ function stateFor(windowId) {
     windows.set(windowId, state);
   }
   return state;
+}
+
+const NEW_TAB_URLS = ['chrome://newtab', 'chrome://new-tab-page', 'chrome-search://local-ntp'];
+
+/** Ctrl+T / the "+" button. Chrome still sets openerTabId to the active tab for these. */
+function isNewTabPage(tab) {
+  const url = tab.pendingUrl || tab.url || '';
+  return NEW_TAB_URLS.some((prefix) => url.startsWith(prefix));
 }
 
 function isTreeTab(tab) {
@@ -179,6 +202,8 @@ async function sendState() {
     config: {
       indent: config.indent,
       showCount: config.showCount,
+      showGuides: config.showGuides,
+      animations: config.animations,
       highlightColor: config.highlightColor,
     },
   });
@@ -204,10 +229,14 @@ async function onCreated(createdTab) {
   const opener = tab.openerTabId != null
     ? siblings.find((candidate) => candidate.id === tab.openerTabId)
     : null;
-  if (isTreeTab(tab) && opener && isTreeTab(opener)) {
+  const nestUnderOpener = opener && isTreeTab(tab) && isTreeTab(opener)
+    && (config.newTabButtonIsChild || !isNewTabPage(tab));
+  if (nestUnderOpener) {
     tree.attachAsLastChild(state, tab.id, opener.id);
-    await applyOrder(tab.windowId, state);
   }
+  // A new root may have been inserted in the middle of a subtree (Chrome places tabs next to
+  // their opener): the tree order wins either way.
+  await applyOrder(tab.windowId, state);
   bumpState();
   await saveSession();
 }
@@ -237,9 +266,14 @@ async function onRemoved(tabId, removeInfo) {
     return;
   }
   const state = stateFor(removeInfo.windowId);
-  tree.removeTab(state, tabId);
+  // Closing a tab closes its whole subtree (PLAN.md section 3).
+  const descendants = tree.descendantsOf(state, tabId);
+  tree.detachSubtree(state, tabId);
   bumpState();
   await saveSession();
+  if (descendants.length) {
+    await chrome.tabs.remove(descendants).catch(() => null);
+  }
 }
 
 async function closeSubtree(tabId, windowId) {
@@ -362,32 +396,57 @@ async function onUpdated(tabId, changeInfo, tab) {
 // Native messages
 // ---------------------------------------------------------------------------------------
 
-async function handleNativeMessage(message) {
+// Native events are handled strictly in order: dragBegin, dropOnto and dragEnd of one drag
+// all touch the same state and must not interleave.
+let nativeQueue = Promise.resolve();
+
+function handleNativeMessage(message) {
+  nativeQueue = nativeQueue
+    .then(() => dispatchNativeMessage(message))
+    .catch((error) => console.warn('ArborTab: native message failed', message?.type, error));
+  return nativeQueue;
+}
+
+async function dispatchNativeMessage(message) {
+  await ensureInit();
   switch (message.type) {
     case 'twistyClick':
       await toggleCollapsed(message.tabId);
       break;
     case 'dragBegin':
-      await onDragBegin();
+      await onDragBegin(message.draggedTabId);
       break;
     case 'dragEnd':
       await onDragEnd();
       break;
     case 'dropOnto':
-      await dropOnto(message.targetTabId, message.zone);
+      await dropOnto(message.targetTabId, message.zone, message.draggedTabId);
       break;
     default:
       break;
   }
 }
 
+/** The tab being dragged: reported by the native module, else the active tab. */
+async function draggedTab(draggedTabId) {
+  if (draggedTabId) {
+    const tab = await chrome.tabs.get(draggedTabId).catch(() => null);
+    if (tab) {
+      return tab;
+    }
+  }
+  return activeTab();
+}
+
 // While a parent is dragged only the parent itself should move, so its subtree is hidden.
-async function onDragBegin() {
+async function onDragBegin(draggedTabId) {
   dragActive = true;
-  const tab = await activeTab();
+  dragWindowId = null;
+  const tab = await draggedTab(draggedTabId);
   if (!tab) {
     return;
   }
+  dragWindowId = tab.windowId;
   const state = stateFor(tab.windowId);
   const children = tree.childIdsOf(state, tab.id);
   if (!children.length) {
@@ -402,17 +461,21 @@ async function onDragBegin() {
 
 async function onDragEnd() {
   dragActive = false;
-  if (dragTemporarilyCollapsed == null) {
-    return;
+  const windowId = dragWindowId;
+  dragWindowId = null;
+  if (dragTemporarilyCollapsed != null) {
+    const tabId = dragTemporarilyCollapsed;
+    dragTemporarilyCollapsed = null;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab) {
+      tree.setCollapsed(stateFor(tab.windowId), tabId, false);
+    }
   }
-  const tab = await chrome.tabs.get(dragTemporarilyCollapsed).catch(() => null);
-  const tabId = dragTemporarilyCollapsed;
-  dragTemporarilyCollapsed = null;
-  if (!tab) {
-    return;
+  // The tree is the only authority on order: whatever Chrome did to the strip during the drag
+  // is undone here (moves outside a drag keep going through onMoved/adoptOrder).
+  if (windowId != null && windows.has(windowId)) {
+    await applyOrder(windowId, stateFor(windowId));
   }
-  const state = stateFor(tab.windowId);
-  tree.setCollapsed(state, tabId, false);
   bumpState();
   await saveSession();
 }
@@ -431,25 +494,32 @@ async function toggleCollapsed(tabId) {
   await saveSession();
 }
 
-async function dropOnto(targetTabId, zone = 'nest') {
+async function dropOnto(targetTabId, zone = 'nest', draggedTabId = null) {
   const target = await chrome.tabs.get(targetTabId).catch(() => null);
   if (!target) {
     return;
   }
-  const [activeTab] = await chrome.tabs.query({ active: true, windowId: target.windowId });
-  if (!activeTab || activeTab.id === targetTabId) {
+  const dragged = await draggedTab(draggedTabId);
+  if (!dragged || dragged.id === targetTabId || dragged.windowId !== target.windowId) {
     return;
   }
+  if (!isTreeTab(dragged) || !isTreeTab(target)) {
+    return; // pinned and grouped tabs stay outside the tree
+  }
   const state = stateFor(target.windowId);
-  if (tree.subtreeIds(state, activeTab.id).includes(targetTabId)) {
+  if (tree.subtreeIds(state, dragged.id).includes(targetTabId)) {
     return; // dropping a parent onto its own descendant would create a cycle
   }
-  if (zone === 'before' || zone === 'after') {
-    // Edge drop: a sibling reorder, the parent does not change.
-    tree.insertSibling(state, activeTab.id, targetTabId, zone);
+  // Every case moves the dragged tab with its whole subtree; descendants keep their parents.
+  if (zone === 'end') {
+    // Below the last tab: the last top-level tab.
+    tree.attachAsLastChild(state, dragged.id, null);
+  } else if (zone === 'before' || zone === 'after') {
+    // Edge drop: a sibling reorder next to the target, under the target's parent.
+    tree.insertSibling(state, dragged.id, targetTabId, zone);
   } else {
-    // Middle drop: become the target's last child (PLAN.md section 3).
-    tree.attachAsLastChild(state, activeTab.id, targetTabId);
+    // Drop onto the tab: become the target's last child (PLAN.md section 3).
+    tree.attachAsLastChild(state, dragged.id, targetTabId);
   }
   await applyOrder(target.windowId, state);
   bumpState();
@@ -576,7 +646,7 @@ chrome.commands.onCommand.addListener((command) => {
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'sync' && changes.config) {
-    config = { ...DEFAULT_CONFIG, ...(changes.config.newValue || {}) };
+    config = withDefaults(changes.config.newValue);
     bumpState();
   }
 });
@@ -605,7 +675,8 @@ chrome.runtime.onStartup.addListener(() => void ensureInit());
 globalThis.arbortab = {
   getState: () => ({ version: stateVersion, config, windows: serializeWindows(), connected: link.isConnected, features: link.features }),
   // Sandbox test hook: exercises the same path as a native dropOnto event.
-  __testDrop: (targetTabId, zone) => dropOnto(targetTabId, zone),
+  __testDrop: (targetTabId, zone, draggedTabId) => dropOnto(targetTabId, zone, draggedTabId),
+  __testToggle: (tabId) => toggleCollapsed(tabId),
   __testDragBegin: onDragBegin,
   __testDragEnd: onDragEnd,
   closeTree: async (tabId) => {

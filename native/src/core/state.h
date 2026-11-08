@@ -21,9 +21,12 @@ struct TabDisplayState {
 };
 
 struct DisplayConfig {
-  int indent = 16;
+  int indent = 14;
   bool show_count = true;
-  uint32_t highlight_color = 0x663D7EFF;
+  bool show_guides = true;
+  bool animations = true;
+  // ARGB drop-target accent; 0 follows the browser theme (ui::kColorSysPrimary).
+  uint32_t highlight_color = 0;
   int min_tab_width = 48;
 
   bool operator==(const DisplayConfig&) const = default;
@@ -37,6 +40,8 @@ class StateStore {
   void RemoveClient(int client_id);
 
   TabDisplayState Get(int tab_id) const;
+  // Like Get, but tells whether any client has described the tab yet.
+  bool Find(int tab_id, TabDisplayState& out) const;
   DisplayConfig Config() const;
   // Increments on every accepted change so the UI thread can skip redundant refreshes.
   uint64_t Version() const;

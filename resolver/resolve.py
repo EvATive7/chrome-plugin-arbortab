@@ -33,6 +33,9 @@ TI_GET_LENGTH = 2
 TI_FINDCHILDREN = 7
 TI_GET_OFFSET = 10
 TI_GET_CHILDRENCOUNT = 13
+TI_GET_TYPEID = 4
+TI_GET_VALUE = 11
+TI_GET_BITPOSITION = 14
 TI_GET_SYMTAG = 0
 SYM_TAG_DATA = 7
 SYM_TAG_BASE_CLASS = 18
@@ -193,6 +196,82 @@ class DbgHelp:
         return layouts[0]
 
 
+    def _children(self, index: int) -> list[int]:
+        count = int(self.type_info(index, TI_GET_CHILDRENCOUNT, W.DWORD) or 0)
+
+        class FIND_CHILDREN(C.Structure):
+            _fields_ = [("Count", W.ULONG), ("Start", W.ULONG), ("ChildId", W.ULONG * count)]
+
+        children = FIND_CHILDREN(count, 0)
+        if count and not self.dbg.SymGetTypeInfo(self.process, self.module, index, TI_FINDCHILDREN, C.byref(children)):
+            return []
+        return list(children.ChildId)
+
+    def _name(self, index: int) -> str | None:
+        pointer = C.c_void_p()
+        if not self.dbg.SymGetTypeInfo(self.process, self.module, index, TI_GET_SYMNAME, C.byref(pointer)):
+            return None
+        return C.wstring_at(pointer.value) if pointer.value else None
+
+    def _member(self, type_name: str, member: str) -> int:
+        """Child id of `member` in `type_name`; must be the same in every definition."""
+        found = []
+        for index in self.type_indices(type_name):
+            for child in self._children(index):
+                if self.type_info(child, TI_GET_SYMTAG, W.DWORD) == SYM_TAG_DATA and self._name(child) == member:
+                    found.append(child)
+        if not found:
+            raise ValueError(f"member not found: {type_name}::{member}")
+        return found[0]
+
+    def enum_value(self, enum_name: str, enumerator: str) -> int:
+        values = set()
+        for index in self.type_indices(enum_name):
+            for child in self._children(index):
+                if self._name(child) != enumerator:
+                    continue
+
+                class VARIANT(C.Structure):
+                    _fields_ = [("vt", W.USHORT), ("reserved", W.USHORT * 3), ("value", C.c_int64), ("pad", C.c_int64)]
+
+                variant = VARIANT()
+                if self.dbg.SymGetTypeInfo(self.process, self.module, child, TI_GET_VALUE, C.byref(variant)):
+                    # VT_I1/UI1/I2/UI2/I4/UI4/INT/UINT: only the low bytes are meaningful.
+                    widths = {16: 1, 17: 1, 2: 2, 18: 2, 3: 4, 19: 4, 22: 4, 23: 4}
+                    width = widths.get(variant.vt, 8)
+                    raw = variant.value & ((1 << (8 * width)) - 1)
+                    signed = variant.vt in (16, 2, 3, 22, 20)
+                    if signed and raw >> (8 * width - 1):
+                        raw -= 1 << (8 * width)
+                    values.add(raw)
+        if len(values) != 1:
+            raise ValueError(f"enumerator must resolve uniquely: {enum_name}::{enumerator} -> {sorted(values)}")
+        return values.pop()
+
+    def base_offset(self, type_name: str, base_name: str) -> int:
+        offsets = set()
+        for index in self.type_indices(type_name):
+            for child in self._children(index):
+                if self.type_info(child, TI_GET_SYMTAG, W.DWORD) != SYM_TAG_BASE_CLASS:
+                    continue
+                base_type = self.type_info(child, TI_GET_TYPEID, W.DWORD)
+                if base_type is not None and self._name(base_type) == base_name:
+                    offset = self.type_info(child, TI_GET_OFFSET, W.DWORD)
+                    if offset is not None:
+                        offsets.add(int(offset))
+        if len(offsets) != 1:
+            raise ValueError(f"base class must resolve uniquely: {type_name} -> {base_name}: {sorted(offsets)}")
+        return offsets.pop()
+
+    def bitfield(self, type_name: str, member: str) -> dict[str, int]:
+        child = self._member(type_name, member)
+        position = self.type_info(child, TI_GET_BITPOSITION, W.DWORD)
+        width = self.type_info(child, TI_GET_LENGTH, C.c_uint64)
+        if position is None or not width:
+            raise ValueError(f"not a bit field: {type_name}::{member}")
+        return {"bit": int(position), "width": int(width)}
+
+
 def pdb_key_and_name(pe: pefile.PE) -> tuple[str, str]:
     pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DEBUG"]])
     for debug in pe.DIRECTORY_ENTRY_DEBUG:
@@ -311,6 +390,18 @@ def main() -> int:
             raise ValueError(f"vtable slot must be unique: {output_name}: {sorted(found_slots)}")
         slots[output_name] = found_slots.pop()
 
+    constants: dict[str, int] = {}
+    for output_name, (enum_name, enumerator) in spec.get("constants", {}).items():
+        constants[output_name] = symbols.enum_value(enum_name, enumerator)
+
+    bitfields: dict[str, dict[str, int]] = {}
+    for output_name, (type_name, member) in spec.get("bitfields", {}).items():
+        bitfields[output_name] = symbols.bitfield(type_name, member)
+
+    bases: dict[str, str] = {}
+    for output_name, (type_name, base_name) in spec.get("bases", {}).items():
+        bases[output_name] = f"0x{symbols.base_offset(type_name, base_name):x}"
+
     output = {
         "schema": int(spec["schema"]),
         "chromeVersion": version,
@@ -322,13 +413,17 @@ def main() -> int:
         "vtables": vtables,
         "vtableSlots": slots,
         "fields": fields,
+        "constants": constants,
+        "bitfields": bitfields,
+        "bases": bases,
         "sizes": {name: f"0x{layout[0]:x}" for name, layout in type_cache.items()},
         "checks": spec["checks"],
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(output, indent=2, sort_keys=False) + "\n", encoding="utf-8")
     print(f"resolved Chrome {version} ({key}) -> {args.out}")
-    print(f"validated {len(functions)} functions, {len(fields)} fields, {len(type_cache)} types, {len(slots)} vtable slots")
+    print(f"validated {len(functions)} functions, {len(fields)} fields, {len(type_cache)} types, {len(slots)} vtable slots, "
+          f"{len(constants)} constants, {len(bitfields)} bit fields")
     return 0
 
 

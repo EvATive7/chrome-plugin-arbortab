@@ -17,6 +17,10 @@ void UiThreadRecordHostView(void* view, void* layout_manager);
 // Requests a refresh from any thread. The views are validated again on the UI thread.
 void UiThreadRequestRefresh();
 
+// Arms the ~60 Hz animation frame timer (UI thread only). On the tick the queued per-tab
+// work runs, and with `hosts` every recorded tab strip is invalidated and repainted.
+void UiThreadScheduleFrame(bool hosts);
+
 // Number of UI-thread refreshes performed (diagnostics).
 long UiThreadRefreshCount();
 

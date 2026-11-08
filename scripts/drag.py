@@ -74,8 +74,11 @@ def layout_snapshot() -> tuple[list[dict], dict]:
 def ui_state(worker: Session, browser: Session) -> dict:
     state = extension_state(worker, browser)
     window = next(iter(state["windows"].values()))
-    nodes = {int(tab): (parent, collapsed) for tab, parent, collapsed in window["nodes"]}
-    return {"order": [int(tab) for tab in window["order"]], "nodes": nodes}
+    order = [int(tab) for tab in window["order"]]
+    parents = {int(tab): int(parent) for tab, parent in window.get("parents", [])}
+    collapsed = {int(tab) for tab in window.get("collapsed", [])}
+    nodes = {tab: (parents.get(tab), tab in collapsed) for tab in order}
+    return {"order": order, "nodes": nodes}
 
 
 def setup_tabs(worker: Session, browser: Session, count: int = 4) -> list[int]:

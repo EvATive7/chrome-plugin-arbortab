@@ -63,6 +63,16 @@ TabDisplayState StateStore::Get(int tab_id) const {
   return found == tabs_.end() ? TabDisplayState{} : found->second;
 }
 
+bool StateStore::Find(int tab_id, TabDisplayState& out) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto found = tabs_.find(tab_id);
+  if (found == tabs_.end()) {
+    return false;
+  }
+  out = found->second;
+  return true;
+}
+
 DisplayConfig StateStore::Config() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return config_;
