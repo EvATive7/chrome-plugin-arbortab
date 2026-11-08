@@ -42,6 +42,10 @@ def load(root: Path, migrate: bool) -> dict:
 
 
 def save(root: Path, index: dict) -> None:
+    # Signatures cover exact bytes: git must never convert line endings on this branch.
+    attributes = root / ".gitattributes"
+    if not attributes.exists():
+        attributes.write_bytes(b"* -text\n")
     index.pop("legacy", None)
     index["schemas"] = {schema: dict(sorted(versions.items()))
                         for schema, versions in sorted(index["schemas"].items(), key=lambda kv: int(kv[0]))}

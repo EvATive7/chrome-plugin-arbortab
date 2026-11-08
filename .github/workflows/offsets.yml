@@ -27,6 +27,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Windows runners default to core.autocrlf=true: a checked-out offsets file would then
+      # differ from the bytes git stores and GitHub serves, and its signature would not match.
+      - name: Keep line endings as stored
+        run: git config --global core.autocrlf false
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -120,7 +125,7 @@ jobs:
           }
           uv run python -I D:\arbortab\offsets_index.py add . $schema $version $key "D:\arbortab\$key.json"
           if ($LASTEXITCODE -ne 0) { throw 'publishing the offsets failed' }
-          git add -A index.json win64
+          git add -A index.json win64 .gitattributes
           git commit -m "offsets: Chrome $version (schema $schema)"
           git push origin offsets
           $global:LASTEXITCODE = 0
