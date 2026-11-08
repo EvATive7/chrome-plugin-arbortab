@@ -1,0 +1,75 @@
+schema: 1
+platform: win64
+functions:
+  UnpinnedTabContainerViewLayout::CalculateProposedLayout:
+    symbol: "?CalculateProposedLayout@UnpinnedTabContainerViewLayout@@UEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z"
+  TabView::OnMousePressed:
+    symbol: "?OnMousePressed@TabView@@EEAA_NAEBVMouseEvent@ui@@@Z"
+  TabView::OnPaint:
+    symbol: "?OnPaint@TabView@@EEAAXPEAVCanvas@gfx@@@Z"
+  TabView::PaintChildren:
+    symbol: "?PaintChildren@TabView@@EEAAXAEBVPaintInfo@views@@@Z"
+  DraggedTabsContainer::HandleTabDragInContainer:
+    private: "DraggedTabsContainer::HandleTabDragInContainer"
+  DraggedTabsContainer::OnTabDragEnded:
+    symbol: "?OnTabDragEnded@DraggedTabsContainer@@UEAAXXZ"
+  TabDragHandlerImpl::EndDrag:
+    symbol: "?EndDrag@TabDragHandlerImpl@@UEAAXW4EndDragReason@@@Z"
+  TabView::GetTabInterface:
+    private: "TabView::GetTabInterface"
+  sessions::SessionTabHelper::IdForTab:
+    symbol: "?IdForTab@SessionTabHelper@sessions@@SA?AVSessionID@@PEBVWebContents@content@@@Z"
+  tabs::TabModel::GetContents:
+    symbol: "?GetContents@TabModel@tabs@@UEBAPEAVWebContents@content@@XZ"
+  views::View::InvalidateLayout:
+    symbol: "?InvalidateLayout@View@views@@QEAAX_N@Z"
+  views::View::SchedulePaint:
+    symbol: "?SchedulePaint@View@views@@QEAAXXZ"
+  gfx::Canvas::FillRect:
+    symbol: "?FillRect@Canvas@gfx@@QEAAXAEBVRect@2@I@Z"
+  gfx::Canvas::DrawStringRect:
+    symbol: "?DrawStringRect@Canvas@gfx@@QEAAXV?$basic_string_view@_SU?$char_traits@_S@__Cr@std@@@__Cr@std@@AEBVFontList@2@IAEBVRect@2@@Z"
+vtables:
+  TabView: "TabView::`vftable'"
+  tabs::TabModel: "tabs::TabModel::`vftable'"
+vtableSlots:
+  tabs::TabModel::GetContents:
+    vtable: tabs::TabModel
+    function: tabs::TabModel::GetContents
+fields:
+  TabView.collection_node_: [TabView, collection_node_]
+  TabView.title_: [TabView, title_]
+  TabView.icon_: [TabView, icon_]
+  TabView.close_button_: [TabView, close_button_]
+  TabView.active_: [TabView, active_]
+  TabView.selected_: [TabView, selected_]
+  TabView.hovered_: [TabView, hovered_]
+  TabView.collapsed_: [TabView, collapsed_]
+  TabView.pinned_: [TabView, pinned_]
+  UnpinnedTabContainerViewLayout.orientation_: [UnpinnedTabContainerViewLayout, orientation_]
+  DraggedTabsContainer.host_view_: [DraggedTabsContainer, host_view_]
+  DraggedTabsContainer.collection_node_: [DraggedTabsContainer, collection_node_]
+  DraggedTabsContainer.dragging_views_: [DraggedTabsContainer, dragging_views_]
+  TabCollectionNode.type_: [TabCollectionNode, type_]
+  TabCollectionNode.node_data_: [TabCollectionNode, node_data_]
+  TabCollectionNode.children_: [TabCollectionNode, children_]
+  TabCollectionNode.node_view_: [TabCollectionNode, node_view_]
+  ui::Event.flags_: [ui::Event, flags_]
+  ui::LocatedEvent.location_: [ui::LocatedEvent, location_]
+  views::ProposedLayout.host_size: [views::ProposedLayout, host_size]
+  views::ProposedLayout.child_layouts: [views::ProposedLayout, child_layouts]
+  views::ChildLayout.child_view: [views::ChildLayout, child_view]
+  views::ChildLayout.visible: [views::ChildLayout, visible]
+  views::ChildLayout.bounds: [views::ChildLayout, bounds]
+  views::ChildLayout.available_size: [views::ChildLayout, available_size]
+types:
+  TabView: 0x690
+  UnpinnedTabContainerViewLayout: 0x278
+  DraggedTabsContainer: 0x220
+  TabCollectionNode: 0x118
+  ui::Event: 0xb0
+  ui::LocatedEvent: 0xc0
+  views::ProposedLayout: 0x190
+  views::ChildLayout: 0x30
+checks:
+  ChildLayoutList: "absl::InlinedVector<views::ChildLayout,8>"

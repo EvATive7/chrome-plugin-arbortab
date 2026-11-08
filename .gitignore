@@ -1,0 +1,19 @@
+# Native build products
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+research/poc/version.dll
+
+# JavaScript / Python caches
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+
+# Local test output
+artifacts/
+build/
+out/
+.vscode/

@@ -1,0 +1,110 @@
+name: Resolve Chrome offsets
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: offsets
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    runs-on: windows-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Query stable Chrome
+        id: chrome
+        shell: pwsh
+        run: uv run python scripts/query-chrome.py --github-output $env:GITHUB_OUTPUT
+
+      - name: Check whether version is already resolved
+        id: existing
+        shell: pwsh
+        run: |
+          git fetch origin offsets:refs/remotes/origin/offsets 2>$null
+          $exists = $false
+          if ($LASTEXITCODE -eq 0) {
+            $index = git show origin/offsets:index.json 2>$null | ConvertFrom-Json
+            if ($index.versions.PSObject.Properties.Name -contains '${{ steps.chrome.outputs.version }}') { $exists = $true }
+          }
+          "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+      - name: Download and extract Chrome
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path D:\arbortab | Out-Null
+          curl.exe -L --fail --retry 5 --output D:\arbortab\chrome-installer.exe '${{ steps.chrome.outputs.url }}'
+          $actual = (Get-FileHash D:\arbortab\chrome-installer.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ steps.chrome.outputs.sha256 }}') { throw "Installer hash mismatch: $actual" }
+          ./scripts/extract-chrome.ps1 -Installer D:\arbortab\chrome-installer.exe -Output D:\arbortab\extracted -Version '${{ steps.chrome.outputs.version }}'
+
+      - name: Read PDB key
+        if: steps.existing.outputs.exists != 'true'
+        id: pdb
+        shell: pwsh
+        run: |
+          $line = uv run --with pefile python -I research/tools/pdbinfo.py D:\arbortab\extracted\chrome.dll
+          $key = ($line -split ' ')[-1].Trim()
+          "key=$key" >> $env:GITHUB_OUTPUT
+          Write-Host "PDB key: $key"
+
+      - name: Download PDB
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $url = 'https://chromium-browser-symsrv.commondatastorage.googleapis.com/chrome.dll.pdb/${{ steps.pdb.outputs.key }}/chrome.dll.pdb'
+          curl.exe -L --fail --retry 5 --compressed --output D:\arbortab\chrome.dll.pdb $url
+
+      - name: Resolve and validate offsets
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          uv run --with pefile --with pyyaml python resolver/resolve.py --dll D:\arbortab\extracted\chrome.dll --pdb D:\arbortab\chrome.dll.pdb --out "D:\arbortab\${{ steps.pdb.outputs.key }}.json"
+
+      - name: Publish offsets branch
+        if: steps.existing.outputs.exists != 'true'
+        shell: pwsh
+        run: |
+          $version = '${{ steps.chrome.outputs.version }}'
+          $key = '${{ steps.pdb.outputs.key }}'
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if (git show-ref --verify --quiet refs/remotes/origin/offsets) {
+            git switch --force-create offsets origin/offsets
+          } else {
+            git switch --orphan offsets
+            git rm -rf .
+          }
+          New-Item -ItemType Directory -Force win64 | Out-Null
+          Copy-Item "D:\arbortab\$key.json" "win64\$key.json"
+          $index = if (Test-Path index.json) { Get-Content index.json -Raw | ConvertFrom-Json -AsHashtable } else { @{schema=1; versions=@{}} }
+          $index.versions[$version] = $key
+          $index | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 index.json
+          git add index.json "win64/$key.json"
+          git commit -m "offsets: Chrome $version"
+          git push origin offsets
+
+      - name: Create issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $title = "Offsets failed for Chrome ${{ steps.chrome.outputs.version }}"
+          $body = "Workflow: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`n`nResolver or validation failed; inspect the workflow log for the missing symbol/type/check."
+          $existing = gh issue list --state open --search "in:title $title" --json number --jq '.[0].number'
+          if ($existing) { gh issue comment $existing --body $body } else { gh issue create --title $title --body $body }
