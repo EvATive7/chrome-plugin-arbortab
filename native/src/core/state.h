@@ -1,6 +1,7 @@
 // Thread-safe display state shared between the WebSocket thread and the UI thread.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -16,6 +17,9 @@ struct TabDisplayState {
   bool has_children = false;
   bool collapsed = false;
   int hidden_count = 0;
+  // Fixed storage keeps this state trivially destructible: it is copied inside guarded UI
+  // hooks where MSVC does not allow objects that require C++ unwinding.
+  std::array<char, 1024> title{};
 
   bool operator==(const TabDisplayState&) const = default;
 };

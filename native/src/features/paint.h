@@ -45,6 +45,8 @@ void StrokeLine(void* canvas, float x1, float y1, float x2, float y2, float stro
 
 // Small UI font (one step below the label default). Width/height are 0 when text is
 // unavailable.
+// Width in Chrome's normal UI label font.
+int32_t DefaultTextWidth(std::u16string_view text);
 int32_t SmallTextWidth(std::u16string_view text);
 int32_t SmallTextHeight();
 void DrawSmallText(void* canvas, std::u16string_view text, uint32_t color, int32_t x, int32_t y,

@@ -26,7 +26,7 @@ import sandbox  # noqa: E402  (paths, kill(), install_dll(), wait_cdp())
 REPO = Path(__file__).resolve().parent.parent
 DLL = REPO / "artifacts" / "native" / "version.dll"
 EXTENSION = REPO / "extension"
-EXTENSION_ID = "ohpbcfelmjohmnbcidneadeodlbeleno"
+EXTENSION_ID = "egjpjafmlomkpnncliaigklbdbflface"
 LOG = Path(os.environ["LOCALAPPDATA"]) / "ArborTab" / "logs" / "native.log"
 STAMP = re.compile(rb"\d\d-\d\d \d\d:\d\d")
 

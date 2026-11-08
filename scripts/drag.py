@@ -26,7 +26,7 @@ import click as win  # noqa: E402  (scripts/click.py: window helpers)
 from e2e import Session, browser_ws, call_worker, extension_state, report, service_worker_session  # noqa: E402
 
 CDP_PORT = 9334
-ORIGIN = "chrome-extension://ohpbcfelmjohmnbcidneadeodlbeleno"
+ORIGIN = "chrome-extension://egjpjafmlomkpnncliaigklbdbflface"
 PORTS = (47821, 47822, 47823, 47824, 47825)
 ARTIFACTS = Path(__file__).resolve().parent.parent / "artifacts"
 

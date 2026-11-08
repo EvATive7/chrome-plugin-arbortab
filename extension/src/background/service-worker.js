@@ -192,7 +192,8 @@ async function sendState() {
     const display = tree.displayState(state, byIndex.map((tab) => tab.id));
     for (const tabId of display.windowTabs) {
       windowTabs.push(tabId);
-      allTabs[tabId] = display.tabs[tabId];
+      const tab = byIndex.find((candidate) => candidate.id === tabId);
+      allTabs[tabId] = { ...display.tabs[tabId], title: tab?.title || '' };
     }
   }
   link.send({
@@ -364,6 +365,10 @@ async function onDetached(tabId, detachInfo) {
 
 async function onUpdated(tabId, changeInfo, tab) {
   await ensureInit();
+  if ('title' in changeInfo) {
+    // The native count badge follows the rendered title, so title changes need a fresh snapshot.
+    bumpState();
+  }
   if (!('pinned' in changeInfo) && !('groupId' in changeInfo)) {
     return;
   }

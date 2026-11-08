@@ -87,10 +87,6 @@ struct Badge {
   std::u16string text;
 };
 
-// Distance from the tab's right edge to the close button's left edge, learned from any tab
-// that shows its button. The badge always sits left of that slot, so it does not jump when
-// hovering reveals the button.
-int32_t g_close_inset = 34;
 // Vertical centre of the close button relative to the tab's own centre (x2, to keep halves).
 int32_t g_close_center_delta2 = 0;
 
@@ -100,8 +96,27 @@ struct BadgeMotion {
   ULONGLONG last_seen = 0;
 };
 std::unordered_map<int, BadgeMotion> g_badges;
+// Geometry is captured immediately after Chrome lays out the full title. Paint happens after
+// we shorten the label, so recomputing from its bounds there would make the badge drift left.
+std::unordered_map<int, Badge> g_badge_geometry;
 
-Badge BadgeFor(const void* tab_view, const TabDisplayState& state) {
+std::u16string Utf8ToUtf16(const std::string& text) {
+  if (text.empty()) {
+    return {};
+  }
+  const int length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                                         static_cast<int>(text.size()), nullptr, 0);
+  if (length <= 0) {
+    return {};
+  }
+  std::u16string converted(static_cast<size_t>(length), u'\0');
+  MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text.data(),
+                      static_cast<int>(text.size()), reinterpret_cast<wchar_t*>(converted.data()),
+                      length);
+  return converted;
+}
+
+Badge BadgeFor(const void* tab_view, const void* title_view, const TabDisplayState& state) {
   Badge badge;
   const DisplayConfig config = GlobalState().Config();
   const Bounds tab = BoundsOf(tab_view);
@@ -123,18 +138,26 @@ Badge BadgeFor(const void* tab_view, const TabDisplayState& state) {
     const void* close = ReadPointer(tab_view, g_offsets.tab_close_button);
     if (close && ReadBool(close, g_offsets.view_visible)) {
       const Bounds button = BoundsOf(close);
-      const int32_t inset = tab.width - button.x;
-      if (button.width > 0 && inset > 0 && inset < 64) {
-        g_close_inset = inset;
+      if (button.width > 0) {
         g_close_center_delta2 = (2 * button.y + button.height) - tab.height;
       }
     }
   }
-  badge.x = tab.width - g_close_inset - 4 - badge.width;
+  if (!title_view) {
+    return badge;
+  }
+  // Keep the count inside Chrome's title allocation. That allocation already stops before
+  // native controls such as mute and close, unlike the old right-edge placement.
+  const Bounds title = BoundsOf(title_view);
+  const int32_t title_right = title.x + title.width;
+  const std::u16string title_text = Utf8ToUtf16(state.title.data());
+  const int32_t title_width = DefaultTextWidth(title_text);
+  const int32_t after_text = title.x + (title_width > 0 ? title_width : 0) + 6;
+  badge.x = after_text < title_right - badge.width ? after_text : title_right - badge.width;
   // Centred on the close button's row, so the pill and the x line up.
   badge.pill_y = static_cast<float>(tab.height + g_close_center_delta2 - badge.height) / 2.f;
   badge.y = (tab.height + g_close_center_delta2 - badge.height) / 2;
-  badge.shown = badge.x > 40;
+  badge.shown = title.width >= badge.width + 6 && badge.x >= title.x;
   return badge;
 }
 
@@ -180,11 +203,13 @@ void ShortenTitleForBadge(void* tab_view) {
   if (!tab_id) {
     return;
   }
-  const Badge badge = BadgeFor(tab_view, GlobalState().Get(tab_id));
   void* title = ReadPointer(tab_view, g_offsets.tab_title);
+  const Badge badge = BadgeFor(tab_view, title, GlobalState().Get(tab_id));
   if (!badge.shown || !title) {
+    g_badge_geometry.erase(tab_id);
     return;
   }
+  g_badge_geometry[tab_id] = badge;
   const Bounds bounds = BoundsOf(title);
   const int32_t limit = badge.x - 6;
   if (bounds.x + bounds.width <= limit) {
@@ -436,11 +461,13 @@ void PaintTabDecor(void* tab_view, void* canvas) {
   if (IconMotionFor(tab_view, tab_id, state, target_changed) && target_changed) {
     RequestTabRepaint(tab_view);
   }
-  const Badge badge = BadgeFor(tab_view, state);
-  if (badge.shown) {
-    PaintBadge(tab_view, canvas, badge, BadgeOpacity(tab_view, tab_id));
+  const auto geometry = g_badge_geometry.find(tab_id);
+  if (geometry != g_badge_geometry.end() && state.collapsed && state.has_children &&
+      state.hidden_count > 0 && GlobalState().Config().show_count) {
+    PaintBadge(tab_view, canvas, geometry->second, BadgeOpacity(tab_view, tab_id));
   } else {
     g_badges.erase(tab_id);
+    g_badge_geometry.erase(tab_id);
   }
 }
 

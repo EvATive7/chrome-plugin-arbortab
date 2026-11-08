@@ -17,3 +17,9 @@ artifacts/
 build/
 out/
 .vscode/
+
+# Local signing material (the manifest contains only the public key)
+*.pem
+*.key
+*.p12
+*.pfx

@@ -323,6 +323,15 @@ void StrokeLine(void* canvas, float x1, float y1, float x2, float y2, float stro
   g_api.draw_line(canvas, &from, &to, MakeFlags(storage, color, true, stroke));
 }
 
+int32_t DefaultTextWidth(std::u16string_view text) {
+  const void* font = g_api.string_width && g_api.default_font ? g_api.default_font() : nullptr;
+  if (!font) {
+    return 0;
+  }
+  const U16View view{text.data(), text.size()};
+  return g_api.string_width(&view, font);
+}
+
 int32_t SmallTextWidth(std::u16string_view text) {
   const void* font = g_api.string_width ? SmallFont() : nullptr;
   if (!font) {

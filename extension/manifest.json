@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
-  "name": "ArborTab",
+  "name": "__MSG_extensionName__",
   "version": "0.1.0",
-  "description": "Tree-style tab management for the native vertical tab strip: collapsible subtrees, close-with-children, and drag-to-nest.",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
   "minimum_chrome_version": "146",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtsuKm2b/GCf5hCpMRXQpAT02DTGkkONs09sg8A741g9kDmeZu1j5BNCqFLGKBOyMewBiU2Mvmr3kyvCZBT1ZxkewL590VITP1A8uUjJvkMxGaAL9illDZ8OiKkoRSMFi/Sk7vkH7QJgrM2FRZWpLD/v02D+7e2TpyW7f2whcB0MxvLqcMUlh7SYgCIkbML5oEdKRB/xPVrSBEXsZEdEXF0G7iMhSWsq5CGW0vNFNfREP3CuhOjC6ZD3u2EzwUUkKCFppzoMAsCPkH0TKhiOPLLlHDn+32WUUYliWbaT0lWw21pFCuQNdyk923c+i34zFVaYDyA8hNjUO7ptOQAuzCQIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwoy5G909oXT/LS1XuFy1z9c+uh/m48czDP9U9gbyEJl4pZQPSlwfbl1RMWTnweMopHr4i/AOEj54d3zV4FcKdsPxI26YZy+OqR6SomV/0R0MKLuCZ/b4aQJYiXG40ejWXTJa59jL/PTECnGsFhV77xZiWg4kOKix6BnMrpHMpznmfS0IjefuUp6wQwJEWEx8shFvhkjWTEEbQQwWzsEc3gvNQdMLFpJ5CEiKkix00DaCadaMeOLGpCnmoGW/OfowtIWUPmBj7UxqLJepvB9tomswBgZbaCa8WPsRabJQ+K8L4J/S5wqDnSSUDqN9C0okvasEzwVACCtOWtttgZNnawIDAQAB",
   "permissions": [
     "tabs",
     "storage"
@@ -23,25 +24,25 @@
       "suggested_key": {
         "default": "Alt+Shift+Comma"
       },
-      "description": "Collapse or expand the current tab's subtree"
+      "description": "__MSG_commandToggleCollapsed__"
     },
     "close-tree": {
       "suggested_key": {
         "default": "Alt+Shift+W"
       },
-      "description": "Close the current tab and its whole subtree"
+      "description": "__MSG_commandCloseTree__"
     },
     "outdent": {
       "suggested_key": {
         "default": "Alt+Shift+Up"
       },
-      "description": "Promote the current tab one level"
+      "description": "__MSG_commandOutdent__"
     },
     "indent": {
       "suggested_key": {
         "default": "Alt+Shift+Down"
       },
-      "description": "Nest the current tab under the previous sibling"
+      "description": "__MSG_commandIndent__"
     }
   },
   "icons": {}

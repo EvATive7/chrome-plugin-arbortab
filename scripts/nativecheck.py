@@ -13,7 +13,7 @@ import time
 import urllib.request
 
 PORTS = (47821, 47822, 47823, 47824, 47825)
-ORIGIN = "chrome-extension://ohpbcfelmjohmnbcidneadeodlbeleno"
+ORIGIN = "chrome-extension://egjpjafmlomkpnncliaigklbdbflface"
 
 
 def connect():

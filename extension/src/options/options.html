@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>ArborTab settings</title>
+    <title data-i18n="settingsTitle">ArborTab settings</title>
     <style>
       :root {
         color-scheme: light dark;
@@ -203,7 +203,8 @@
         flex: none;
       }
       .tab .title {
-        flex: 1;
+        flex: 0 1 auto;
+        min-width: 0;
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
@@ -241,24 +242,24 @@
     <main>
       <header>
         <h1>ArborTab</h1>
-        <span id="native-status" class="status">checking…</span>
+        <span id="native-status" class="status" data-i18n="checking">checking…</span>
       </header>
 
       <section class="card">
         <div class="row">
           <div class="label">
-            <span>Native module</span>
-            <span id="native-detail" class="hint">Asking the background worker…</span>
+            <span data-i18n="nativeModule">Native module</span>
+            <span id="native-detail" class="hint" data-i18n="askingBackground">Asking the background worker…</span>
           </div>
         </div>
       </section>
 
-      <h2>Appearance</h2>
+      <h2 data-i18n="appearance">Appearance</h2>
       <section class="card">
         <div class="row">
           <div class="label">
-            <span>Indent per level</span>
-            <span class="hint">How far each child level is pushed in</span>
+            <span data-i18n="indentPerLevel">Indent per level</span>
+            <span class="hint" data-i18n="indentHint">How far each child level is pushed in</span>
           </div>
           <div class="range">
             <input id="indent" type="range" min="8" max="32" step="1" />
@@ -267,51 +268,51 @@
         </div>
         <div class="row">
           <div class="label">
-            <span>Indent guides</span>
-            <span class="hint">Faint lines that connect children to their parent</span>
+            <span data-i18n="indentGuides">Indent guides</span>
+            <span class="hint" data-i18n="indentGuidesHint">Faint lines that connect children to their parent</span>
           </div>
           <label class="switch"><input id="showGuides" type="checkbox" /></label>
         </div>
         <div class="row">
           <div class="label">
-            <span>Hidden-tab count</span>
-            <span class="hint">Badge on a collapsed parent with the number of tabs inside</span>
+            <span data-i18n="hiddenTabCount">Hidden-tab count</span>
+            <span class="hint" data-i18n="hiddenTabCountHint">Badge after the title of a collapsed parent showing the number of tabs inside</span>
           </div>
           <label class="switch"><input id="showCount" type="checkbox" /></label>
         </div>
         <div class="row">
           <div class="label">
-            <span>Animations</span>
-            <span class="hint">Glide on collapse, expand and re-parent (also off when Windows animations are off)</span>
+            <span data-i18n="animations">Animations</span>
+            <span class="hint" data-i18n="animationsHint">Glide on collapse, expand and re-parent (also off when Windows animations are off)</span>
           </div>
           <label class="switch"><input id="animations" type="checkbox" /></label>
         </div>
         <div class="row">
           <div class="label">
-            <span>Drop highlight follows the theme</span>
-            <span class="hint">Otherwise use the colour on the right</span>
+            <span data-i18n="themeHighlight">Drop highlight follows the theme</span>
+            <span class="hint" data-i18n="themeHighlightHint">Otherwise use the colour on the right</span>
           </div>
           <div class="accent-controls">
-            <input id="accentColor" type="color" title="Drop highlight colour" />
+            <input id="accentColor" type="color" title="Drop highlight colour" data-i18n-title="dropHighlightColour" />
             <label class="switch"><input id="accentAuto" type="checkbox" /></label>
           </div>
         </div>
         <div id="preview" class="preview" aria-hidden="true"></div>
       </section>
 
-      <h2>Behaviour</h2>
+      <h2 data-i18n="behaviour">Behaviour</h2>
       <section class="card">
         <div class="row">
           <div class="label">
-            <span>The + button opens a child tab</span>
-            <span class="hint">Off: new tabs always start a new tree</span>
+            <span data-i18n="plusOpensChild">The + button opens a child tab</span>
+            <span class="hint" data-i18n="plusOpensChildHint">Off: new tabs always start a new tree</span>
           </div>
           <label class="switch"><input id="newTabButtonIsChild" type="checkbox" /></label>
         </div>
         <div class="row">
           <div class="label">
-            <span>Ask before closing a tree</span>
-            <span class="hint">When closing a tab would close at least this many descendants (0 = never ask)</span>
+            <span data-i18n="askClosingTree">Ask before closing a tree</span>
+            <span class="hint" data-i18n="askClosingTreeHint">When closing a tab would close at least this many descendants (0 = never ask)</span>
           </div>
           <input id="confirmThreshold" type="number" min="0" max="99" step="1" />
         </div>

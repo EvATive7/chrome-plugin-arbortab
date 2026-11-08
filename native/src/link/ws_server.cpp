@@ -311,6 +311,8 @@ void HandleMessageUnsafe(Client& client, const std::string& text) {
           state.has_children = node.value("hasChildren", false);
           state.collapsed = node.value("collapsed", false);
           state.hidden_count = node.value("hiddenCount", 0);
+          const std::string title = node.value("title", std::string());
+          strncpy_s(state.title.data(), state.title.size(), title.c_str(), _TRUNCATE);
         }
         try {
           states[std::stoi(key)] = state;

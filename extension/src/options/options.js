@@ -1,6 +1,10 @@
 // Settings page. Every change is saved right away; the service worker picks it up through
 // chrome.storage.onChanged and pushes it to the native module.
 
+import { localizeDocument, msg } from '../i18n.js';
+
+localizeDocument();
+
 const DEFAULTS = {
   indent: 14,
   showCount: true,
@@ -45,7 +49,7 @@ function toCssColor(argb) {
 
 function render() {
   fields.indent.value = config.indent;
-  $('indent-value').textContent = `${config.indent} px`;
+  $('indent-value').textContent = msg('pixels', String(config.indent));
   fields.showGuides.checked = config.showGuides;
   fields.showCount.checked = config.showCount;
   fields.animations.checked = config.animations;
@@ -61,11 +65,11 @@ function render() {
 }
 
 const PREVIEW_TABS = [
-  { depth: 0, title: 'Project notes' },
-  { depth: 1, title: 'Design review', active: true },
-  { depth: 2, title: 'Mockups — round 2' },
-  { depth: 1, title: 'Issue tracker', badge: 4 },
-  { depth: 0, title: 'Inbox', drop: true },
+  { depth: 0, title: 'previewProjectNotes' },
+  { depth: 1, title: 'previewDesignReview', active: true },
+  { depth: 2, title: 'previewMockups' },
+  { depth: 1, title: 'previewIssueTracker', badge: 4 },
+  { depth: 0, title: 'previewInbox', drop: true },
 ];
 
 function renderPreview() {
@@ -93,7 +97,7 @@ function renderPreview() {
       icon.className = 'icon';
       const title = document.createElement('span');
       title.className = 'title';
-      title.textContent = tab.title;
+      title.textContent = msg(tab.title);
       row.append(icon, title);
       if (tab.badge) {
         const badge = document.createElement('span');
@@ -142,21 +146,23 @@ async function reportNativeStatus() {
     const reply = await chrome.runtime.sendMessage({ type: 'arbortab.status' });
     if (reply?.connected) {
       const features = Object.entries(reply.features || {})
-        .map(([name, enabled]) => `${name} ${enabled ? 'on' : 'off'}`)
+        .map(([name, enabled]) => {
+          const label = msg(`feature${name[0].toUpperCase()}${name.slice(1)}`);
+          return msg(enabled ? 'featureEnabled' : 'featureDisabled', label);
+        })
         .join(' · ');
-      status.textContent = 'Connected';
+      status.textContent = msg('connected');
       status.className = 'status ok';
-      detail.textContent = `Native ${reply.nativeVersion || '?'} — ${features}`;
+      detail.textContent = msg('nativeDetail', [reply.nativeVersion || '?', features]);
     } else {
-      status.textContent = 'Not connected';
+      status.textContent = msg('notConnected');
       status.className = 'status bad';
-      detail.textContent =
-        'version.dll is not installed or has no offsets for this Chrome build; tabs stay unchanged.';
+      detail.textContent = msg('nativeUnavailableDetail');
     }
   } catch {
-    status.textContent = 'Unknown';
+    status.textContent = msg('unknown');
     status.className = 'status';
-    detail.textContent = 'The background worker did not answer.';
+    detail.textContent = msg('backgroundNoAnswer');
   }
 }
 
