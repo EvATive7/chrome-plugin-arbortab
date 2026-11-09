@@ -36,7 +36,7 @@ artifacts/ build/   本地产物（已 gitignore）
 # 构建原生模块 → artifacts/native/version.dll、arbortab-bridge.exe
 pwsh -File tools/dev/build-native.ps1 [-Configuration Debug]
 
-# 一键开发循环：构建 → 停沙盒 → 装 DLL、注册桥 → 启动 → 加载并重载扩展 → 从 native.log 核对构建与桥连接
+# 一键开发循环：构建 → 停沙盒 → 生成沙盒扩展副本 → 装 DLL、注册开发桥 → 启动 → 加载并重载扩展（核对运行标记）→ 从 native.log 核对构建与桥连接
 pwsh -File tools/dev/dev.ps1 [-NoBuild]
 
 # 停沙盒；--as-crash 让下次启动把这次当作异常退出（测安全模式）
@@ -87,6 +87,7 @@ uv run --with cryptography python tools/ci/offsets_sign.py revoke <root> <文件
   - 只有原生模块确定不再支持某个旧协议时，才提高 `kProtocolMin`。
   - 扩展握手时检查 `PROTOCOL ∈ [protocolMin, protocolMax]`；不在范围内就停止向 DLL 发送任何业务消息，设置页提示更新哪一边。
 - **偏移量 schema**：`resolver/spec.yaml` 的 `schema` 与 `native/src/core/offsets.h` 的 `kOffsetsSchema`，两者必须相等。规则见下一节。
+- **更新提醒**（只提醒，不参与兼容判断）：DLL 的 `nativeVersion` 低于扩展版本时（`native-link.js` 的 `nativeOutdated()`），设置页显示“有可用更新”和安装命令，功能照常工作。只比较这一个方向：扩展比 DLL 旧时用户无法自己推进商店更新，提醒没有意义。代价是只改扩展的发版也会提醒用户重装 DLL；这是有意的取舍，换来不用维护“哪个版本改了 DLL”。安全模式、偏移量异常等状态的提示优先，此时只额外显示安装命令。扩展收到较旧 DLL 的握手后，会按“扩展版本 + DLL 版本”组合去重并只自动打开一次设置页；这里不用 `notifications`，以免新增带警告的权限导致自动更新后的扩展被 Chrome 停用。
 
 ## 偏移量
 
@@ -225,7 +226,7 @@ git sparse-checkout set --no-cone <目录...>
 14. **读 `host_view_` 的 `views::View::children_` 拿不到子 view**（读到空集合）。落点判定改用布局自己产出的快照：上一轮布局里每行可见 TabView 的矩形（容器坐标，已含缩进与隐藏处理）。
 15. **标签条内部不要调用原生拖拽 handler**：它在每次移动时都改 tab model，触发原生“其他标签让位”的实时重排，接管压不住。
 16. **快捷键：Chrome 会拒绝部分字母组合**（如 `Alt+Shift+KeyW`），可用的组合是 `Alt+Shift+Comma` / `Alt+Shift+Up` / `Alt+Shift+Down`。
-17. **沙盒重启后扩展可能还在跑旧代码**：版本号不变时，Chrome 会沿用缓存的 service worker 脚本，`Extensions.loadUnpacked` 同一路径也不会刷新。改了扩展代码后，先在 service worker 里执行 `chrome.runtime.reload()` 再测；否则测试可能对着旧代码通过。
+17. **沙盒重启后扩展可能还在跑旧代码**：版本号不变时，Chrome 会沿用缓存的 service worker 脚本，`Extensions.loadUnpacked` 同一路径也不会刷新。改了扩展代码后，先在 service worker 里执行 `chrome.runtime.reload()` 再测；否则测试可能对着旧代码通过。`dev.py` 已自动处理：给每次生成的扩展副本注入一次性运行标记，重载到 worker 报出本次标记才算成功，否则报错；手动在沙盒里测试时仍要注意。
 18. **spec 加了 DLL 依赖的条目却没升 schema，旧文件会被“合法地”接受**：schema 1 时期发布的 156 文件缺少后来加的字段，新 DLL 照样加载，结果 layout/twisty 静默关闭；本机缓存是新生成的，开发时完全看不出来。已因此升到 schema 2。改 spec 时按“偏移量”一节判断是否升号，并用一次真实下载（删掉本地缓存）验证。
 19. **签名要覆盖 git 存储的字节**：Windows runner 默认 `core.autocrlf=true`，签的是 CRLF 的工作区副本，GitHub 发的却是 LF，于是全部验签失败。offsets 工作流已关掉 autocrlf，分支上有 `* -text`；在本机操作 offsets 分支时同样用 `git -c core.autocrlf=false`。另外 raw.githubusercontent.com 有约 5 分钟缓存，刚推送的文件要等一会儿才能下到。
 20. **CDP `Extensions.loadUnpacked` 加载的扩展不会跨重启保留**：不经 `dev.ps1` 直接重启沙盒（比如测安装脚本后），浏览器里根本没有扩展，看起来像“连不上”。这种测试要在启动后再加载一次扩展。
@@ -263,6 +264,10 @@ git sparse-checkout set --no-cone <目录...>
 
   预先在 `Default\Preferences` 写入 `{"vertical_tabs":{"enabled":true,"collapsed_state":false,"uncollapsed_width":240}}`，启动后直接显示垂直标签。
 - **加载扩展**：通过 CDP 浏览器级 WebSocket 发送 `Extensions.loadUnpacked {path}`。Chrome 137+ 正式版已不支持 `--load-extension`。
+- **沙盒扩展副本与开发桥**：`dev.py` 不直接加载 `extension/`，而是每次复制到 `<ARBORTAB_SANDBOX>\extension` 再加载，并注册独立的开发宿主 `com.arbortab.bridge.dev`（`HKCU\...\NativeMessagingHosts\com.arbortab.bridge.dev`，清单在 `<ARBORTAB_SANDBOX>\bridge\`），从不改写正式宿主 `com.arbortab.bridge`，所以本机装的 Chrome 不受影响。
+  - 副本相对源码**只有两处替换**：`native-link.js` 的宿主名改为开发宿主，`service-worker.js` 多一行运行标记（`globalThis.__arbortabDevBuild`）。不要在 `prepare_extension()` 里加别的改动，否则沙盒测的和发布的就不是同一份代码。
+  - 改了 `extension/` 后要重跑 `dev.ps1`（可加 `-NoBuild`）；在 `chrome://extensions` 里点“重新加载”只会重载旧副本。
+  - 旧版 `dev.ps1` 会把正式宿主项改指向沙盒；从旧版升级的开发机要把它改回 `%LOCALAPPDATA%\ArborTab\bridge\com.arbortab.bridge.json`（或重新运行安装脚本）。
 - **用户侧诊断**：扩展在 service worker 内存里保留最近 200 条事件（`diagnostics.js`：连接、断开、hello/status、消息处理失败），设置页“关于与诊断”可复制或下载调试信息：扩展侧（版本、连接方式与偏移量状态、设置、树的规模、事件）加上原生侧的 `debug.report`（含 `native.log` 末尾 120 行），**不含网址和标题**。新增事件或字段时保持这一点。`native.log` 超过 1MB 轮转，保留 3 份旧文件。
 - **自动化断言**：CDP 附加到扩展 service worker，调用 `arbortab.getState()` 读树（`windows[id] = {order, parents, collapsed}`）；原生侧用 `debug.layout` 取布局快照，回复里的 `stats.dropTarget` / `stats.dropZone` 可直接断言落点，不必截图。
 - **截图核对**：`sandbox.py shot <png>` 按窗口矩形截图，人工核对。
