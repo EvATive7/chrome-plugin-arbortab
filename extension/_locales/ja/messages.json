@@ -80,7 +80,6 @@
   "aboutProtocolValue": { "message": "拡張機能 $1 · モジュール $2" },
   "aboutTransport": { "message": "接続方式" },
   "transportPipe": { "message": "Native Messaging ブリッジ" },
-  "transportWebSocket": { "message": "WebSocket（古いインストール：インストールコマンドをもう一度実行してください）" },
   "aboutOffsets": { "message": "オフセット" },
   "offsetsReady": { "message": "準備完了" },
   "aboutLinks": { "message": "プロジェクト" },

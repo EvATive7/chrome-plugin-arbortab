@@ -31,9 +31,19 @@ jobs:
       - name: Package
         run: uv run python -I tools/ci/package.py --dll artifacts/native/version.dll --out dist
 
+      - name: Keep the Chrome Web Store upload package as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arbortab-cws-${{ github.ref_name }}
+          path: dist/cws/arbortab-extension-store-[0-9]*.zip
+          if-no-files-found: error
+          retention-days: 7
+
       # A draft: the release notes and the manual drag check (AGENTS.md) come before publishing.
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
-        run: gh release create '${{ github.ref_name }}' dist/* --draft --generate-notes --title "ArborTab ${{ github.ref_name }}"
+        run: |
+          $assets = Get-ChildItem dist -File | ForEach-Object FullName
+          gh release create '${{ github.ref_name }}' $assets --draft --generate-notes --title "ArborTab ${{ github.ref_name }}"

@@ -675,7 +675,6 @@ function nativeStatus() {
     safeMode: link.native?.safeMode ?? null,
     transport: link.transport,
     bridge: link.bridge,
-    port: link.port,
   };
 }
 

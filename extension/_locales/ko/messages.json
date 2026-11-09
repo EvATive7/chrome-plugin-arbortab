@@ -80,7 +80,6 @@
   "aboutProtocolValue": { "message": "확장 프로그램 $1 · 모듈 $2" },
   "aboutTransport": { "message": "연결 방식" },
   "transportPipe": { "message": "Native Messaging 브리지" },
-  "transportWebSocket": { "message": "WebSocket(이전 설치: 설치 명령을 다시 실행하세요)" },
   "aboutOffsets": { "message": "오프셋" },
   "offsetsReady": { "message": "준비됨" },
   "aboutLinks": { "message": "프로젝트" },

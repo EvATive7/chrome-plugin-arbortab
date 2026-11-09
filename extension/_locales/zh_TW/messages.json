@@ -80,7 +80,6 @@
   "aboutProtocolValue": { "message": "擴充功能 $1 · 原生模組 $2" },
   "aboutTransport": { "message": "連線方式" },
   "transportPipe": { "message": "原生訊息橋接" },
-  "transportWebSocket": { "message": "WebSocket（舊版安裝：請重新執行安裝命令）" },
   "aboutOffsets": { "message": "偏移量" },
   "offsetsReady": { "message": "已就緒" },
   "aboutLinks": { "message": "專案" },

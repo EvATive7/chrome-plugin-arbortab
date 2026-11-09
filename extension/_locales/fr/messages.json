@@ -1,6 +1,6 @@
 {
   "extensionName": { "message": "ArborTab" },
-  "extensionDescription": { "message": "Gestion arborescente des onglets pour la barre verticale native : sous-arbres repliables, fermeture avec les descendants et imbrication par glisser-déposer." },
+  "extensionDescription": { "message": "Onglets en arborescence dans la barre verticale : repliez les branches, fermez les descendants et imbriquez par glisser-déposer." },
   "commandToggleCollapsed": { "message": "Replier ou déplier le sous-arbre de l’onglet actuel" },
   "commandCloseTree": { "message": "Fermer l’onglet actuel et tout son sous-arbre" },
   "commandOutdent": { "message": "Remonter l’onglet actuel d’un niveau" },
@@ -80,7 +80,6 @@
   "aboutProtocolValue": { "message": "extension $1 · module $2" },
   "aboutTransport": { "message": "Connexion" },
   "transportPipe": { "message": "Pont Native Messaging" },
-  "transportWebSocket": { "message": "WebSocket (ancienne installation : relancez la commande d’installation)" },
   "aboutOffsets": { "message": "Offsets" },
   "offsetsReady": { "message": "Prêt" },
   "aboutLinks": { "message": "Projet" },

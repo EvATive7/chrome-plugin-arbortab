@@ -8,6 +8,8 @@
 - The offsets in offsets/ match resolver/spec.yaml's schema and their own file names.
 - The bridge's host manifest allows the extension ID that manifest.json's "key" produces, and
   the extension code and dev tools use that same ID and host name.
+- The extension has no host permissions or loopback WebSocket fallback; the store build uses only
+  Native Messaging for its local connection.
 """
 from __future__ import annotations
 
@@ -44,7 +46,11 @@ def check_locales() -> None:
     default = manifest.get("default_locale", "en")
     reference = set(json.loads((root / default / "messages.json").read_text(encoding="utf-8")))
     for folder in sorted(root.iterdir()):
-        keys = set(json.loads((folder / "messages.json").read_text(encoding="utf-8")))
+        messages = json.loads((folder / "messages.json").read_text(encoding="utf-8"))
+        keys = set(messages)
+        description = messages.get("extensionDescription", {}).get("message", "")
+        if len(description) > 132:
+            fail(f"locale {folder.name} extensionDescription is {len(description)} characters (max 132)")
         if missing := reference - keys:
             fail(f"locale {folder.name} lacks {sorted(missing)}")
         if extra := keys - reference:
@@ -89,6 +95,8 @@ def extension_id(public_key_b64: str) -> str:
 
 def check_bridge() -> None:
     manifest = json.loads((REPO / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("host_permissions"):
+        fail("extension/manifest.json must not request host permissions")
     if "nativeMessaging" not in manifest.get("permissions", []):
         fail("extension/manifest.json lacks the nativeMessaging permission")
     if "key" not in manifest:
@@ -100,6 +108,8 @@ def check_bridge() -> None:
     if origin not in host.get("allowed_origins", []):
         fail(f"packaging/windows/com.arbortab.bridge.json does not allow {origin}")
     link = (REPO / "extension" / "src" / "background" / "native-link.js").read_text(encoding="utf-8")
+    if "new WebSocket" in link or "ws://" in link:
+        fail("native-link.js must not use the loopback WebSocket development endpoint")
     if f"'{host.get('name')}'" not in link:
         fail(f"native-link.js does not connect to the host {host.get('name')!r}")
     dev = (REPO / "tools" / "dev" / "dev.py").read_text(encoding="utf-8")

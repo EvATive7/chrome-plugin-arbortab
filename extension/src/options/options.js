@@ -309,8 +309,7 @@ function renderAbout(reply) {
     : '—';
   $('about-protocol').textContent = msg('aboutProtocolValue', [String(reply?.protocol ?? '?'), range]);
   $('about-transport-row').hidden = !connected;
-  $('about-transport').textContent =
-    msg(reply?.transport === 'pipe' ? 'transportPipe' : 'transportWebSocket');
+  $('about-transport').textContent = msg('transportPipe');
   const offsets = connected ? reply.offsets : null;
   $('about-offsets-row').hidden = !offsets;
   if (offsets) {

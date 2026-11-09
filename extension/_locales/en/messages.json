@@ -80,7 +80,6 @@
   "aboutProtocolValue": { "message": "extension $1 · module $2" },
   "aboutTransport": { "message": "Connection" },
   "transportPipe": { "message": "Native Messaging bridge" },
-  "transportWebSocket": { "message": "WebSocket (older install: run the install command again)" },
   "aboutOffsets": { "message": "Offsets" },
   "offsetsReady": { "message": "Ready" },
   "aboutLinks": { "message": "Project" },

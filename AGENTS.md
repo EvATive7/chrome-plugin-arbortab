@@ -3,7 +3,7 @@
 ArborTab 让 Chrome 原生的**垂直标签栏**变成树状标签（Windows x64）。由两部分组成：
 
 - **扩展**（`extension/`，MV3）：维护标签树（父子、折叠），执行所有结构操作（`chrome.tabs.move` 等），并把显示状态推给原生模块。
-- **原生模块**（`native/`，`version.dll` 代理）：放在 `chrome.exe` 同目录，被浏览器进程加载后用 MinHook 接管标签栏的布局、绘制、鼠标和拖拽，实现缩进、隐藏、折叠标记、拖放落点。扩展经 Native Messaging 桥（`arbortab-bridge.exe`）连到本浏览器的命名管道，WebSocket 作后备（见“通信协议”）。
+- **原生模块**（`native/`，`version.dll` 代理）：放在 `chrome.exe` 同目录，被浏览器进程加载后用 MinHook 接管标签栏的布局、绘制、鼠标和拖拽，实现缩进、隐藏、折叠标记、拖放落点。扩展经 Native Messaging 桥（`arbortab-bridge.exe`）连到本浏览器的命名管道；WebSocket 仅供开发工具使用（见“通信协议”）。
 - **偏移量**：原生模块所需的函数 RVA、字段偏移、vtable 等按 Chrome 版本由 `resolver/` 从官方 PDB 生成，CI 签名后发布到 `offsets` 分支，运行时按 PDB key 下载、验签并永久缓存（见“偏移量”）。
 
 ## 目录结构
@@ -118,8 +118,8 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
   - DLL 侧：管道用 `FILE_FLAG_FIRST_PIPE_INSTANCE` 防抢注，DACL 只允许当前用户和 SYSTEM，拒绝远程；连上后用 `GetNamedPipeClientProcessId` 确认对方的祖先进程里有本浏览器，否则断开。
   - 两端都用 overlapped I/O：同步句柄上一个线程挂着读时，另一个线程的写会被串行化卡住。
   - 每个浏览器实例只和自己的扩展配对，不占端口，Native Messaging 端口还能让 service worker 保持存活。
-- **后备：WebSocket** `ws://127.0.0.1:47821–47825/arbortab`，给没有桥的旧安装和开发工具（`nativecheck.py`、`e2e.py` 的 `debug.layout`）用。服务端校验 `Origin: chrome-extension://<id>`。
-- **扩展的选择顺序**（`native-link.js`）：先连桥；桥未注册（`missing`）、浏览器里没有模块（`module-not-loaded`）或其它失败时，本轮改试 WebSocket；都失败就退避重试（最长 30 秒）。当前传输和桥的状态会出现在设置页“关于与诊断”和调试信息里。
+- **开发端点：WebSocket** `ws://127.0.0.1:47821–47825/arbortab`，只供 `nativecheck.py`、`e2e.py` 等开发工具使用；商店扩展不连接它，也不声明本地主机权限。服务端仍校验 `Origin`。
+- **扩展连接**（`native-link.js`）：只连桥；桥未注册（`missing`）、浏览器里没有模块（`module-not-loaded`）或其它失败时退避重试（最长 30 秒）。当前传输和桥的状态会出现在设置页“关于与诊断”和调试信息里。
 - **来源限制**：`config.ini` 的 `extensions` 可限定扩展 ID，两个传输都适用；为空时放行任意扩展（桥本身已受 `allowed_origins` 限制）。
 - **握手**：扩展发 `hello {protocol, extVersion}`；DLL 回 `hello {protocolMin, protocolMax, nativeVersion, features, offsets {status, schema, chromeVersion}, safeMode {active, crashes, limit}}`。状态变化时（偏移量到位、功能启用）DLL 主动推送同样结构的 `status`。
 - **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount、外观配置），DLL 只负责照着画、不保存树；`safeMode.reset`（用户在设置页点“重新启用”）。DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragEnd`。
@@ -151,8 +151,12 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
   - 只在目录不可写时才请求管理员权限；
   - 拒绝覆盖不是 ArborTab 的 `version.dll`，也不安装不是 ArborTab 的桥（按版本资源的 ProductName 判断，两个二进制共用 `version.rc.in`）；
   - 把安装位置记录到 `%LOCALAPPDATA%\ArborTab\install.json`，供卸载使用。
-- **扩展包**：**保留** manifest 的 `key`，这样解压加载的 Release 与开发版 ID 相同（`egjpjafmlomkpnncliaigklbdbflface`），正好是桥的 `allowed_origins`；只去掉测试和签名材料。上架商店后会得到另一个 ID，届时把它加进 `com.arbortab.bridge.json` 的 `allowed_origins`。`check_repo.py` 会核对 key 推出的 ID、宿主清单、`native-link.js` 的宿主名和 `dev.py` 的 `EXTENSION_ID` 一致。
-- **后续计划**（尚未实现）：上架商店（并把商店 ID 加入 `allowed_origins`）；DLL 与桥的代码签名；商店自动上传；extended-stable 等更多渠道；确认所有用户都有桥后移除 WebSocket 后备。实测待办：Chrome 自动更新后 `Application\version.dll` 是否保留；SmartScreen/Defender 对未签名 DLL 与桥的反应。
+- **扩展包分两种**：
+  - `arbortab-extension-<version>.zip` 是 GitHub 解压版，保留 manifest 的 `key`，当前 ID 为 `egjpjafmlomkpnncliaigklbdbflface`，与桥的 `allowed_origins` 一致；
+  - `cws/arbortab-extension-store-<version>.zip` 是普通 Chrome Web Store 上传包，去掉 manifest 的 `key` 且不含私钥；首次上传时可在本机用 `--store-key extension/key.pem` 额外生成 `cws/arbortab-extension-store-initial-<version>.zip`，它在 zip 根目录含 `key.pem`，用于尝试保留现有 ID。Chromium 旧官方文档明确支持这个机制，2023 年社区仍报告可用，但现行官方文档已不再记载，所以必须先上传草稿核对 ID。一次性初始包绝不能进入 Git、Release、CI、workflow artifact 或任何公开位置；上传后删除。若商店没有沿用旧 ID，则迁移桥白名单、manifest 公钥和 `dev.py`，并发新原生包。
+  普通两种包都去掉测试和签名材料；`check_repo.py` 会核对 manifest 公钥推出的开发 ID、宿主清单、`native-link.js` 的宿主名和 `dev.py` 的 `EXTENSION_ID` 一致。`extension/key.pem` gitignore 且必须离线备份。
+- **商店上架**：隐私政策在 `PRIVACY.md`，八种商店描述和审核说明在 `store-listing/`，素材在 `assets/store/`。商店 ID 确定并完成桥迁移前不能提交正式审核。后续再接商店 API 自动上传；OAuth 凭据只放仓库 secrets。
+- **后续计划**：DLL 与桥的代码签名；商店自动上传；extended-stable 等更多渠道。实测待办：Chrome 自动更新后 `Application\version.dll` 是否保留；SmartScreen/Defender 对未签名 DLL 与桥的反应。
 
 ## 环境
 
@@ -193,7 +197,7 @@ git sparse-checkout set --no-cone <目录...>
 
 - `chrome.exe` 的导入表含 `VERSION.dll`（`GetFileVersionInfoSizeW`、`GetFileVersionInfoW`、`VerQueryValueW`），因此同目录的 `version.dll` 会被加载进浏览器进程。
 - 在 `chrome.dll` 的加载完成通知（`LdrRegisterDllNotification`）里安装 MinHook 接管可行；网络、下载这类重操作必须挪到后台线程。
-- 扩展连接 `ws://127.0.0.1` 时，manifest 声明了 `host_permissions` 就**没有权限提示**；服务端收到 `Origin: chrome-extension://<id>`，据此做来源校验。
+- 原生 WebSocket 开发端点会收到客户端 `Origin` 并做来源校验；正式扩展只走 Native Messaging，不再请求 `127.0.0.1` 的 `host_permissions`。
 - Chrome 符号服务器上有正式版 `chrome.dll` 的完整私有 PDB，含类型信息。
 - PDB key = PE 调试目录里 CodeView 记录的 GUID（32 位十六进制）+ Age（十六进制），无分隔符。
 - 符号服务器：`https://chromium-browser-symsrv.commondatastorage.googleapis.com/chrome.dll.pdb/<key>/chrome.dll.pdb`，gzip 传输编码（约 1.08GB，**curl 要加 `--compressed`**），解压后约 5.7GB。新版本发布后 PDB 常要数小时甚至数天才上线。

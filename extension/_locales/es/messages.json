@@ -1,6 +1,6 @@
 {
   "extensionName": { "message": "ArborTab" },
-  "extensionDescription": { "message": "Gestión de pestañas en árbol para la barra vertical nativa: subárboles plegables, cierre con descendientes y anidamiento mediante arrastre." },
+  "extensionDescription": { "message": "Pestañas en árbol en la barra vertical nativa: pliega subárboles, cierra descendientes y anida pestañas arrastrándolas." },
   "commandToggleCollapsed": { "message": "Plegar o desplegar el subárbol de la pestaña actual" },
   "commandCloseTree": { "message": "Cerrar la pestaña actual y todo su subárbol" },
   "commandOutdent": { "message": "Subir un nivel la pestaña actual" },
@@ -80,7 +80,6 @@
   "aboutProtocolValue": { "message": "extensión $1 · módulo $2" },
   "aboutTransport": { "message": "Conexión" },
   "transportPipe": { "message": "Puente de Native Messaging" },
-  "transportWebSocket": { "message": "WebSocket (instalación antigua: vuelve a ejecutar el comando de instalación)" },
   "aboutOffsets": { "message": "Offsets" },
   "offsetsReady": { "message": "Listo" },
   "aboutLinks": { "message": "Proyecto" },

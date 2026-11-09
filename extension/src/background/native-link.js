@@ -1,12 +1,10 @@
 // Connection to the ArborTab native module.
 //
-// Preferred transport: Native Messaging. Chrome starts arbortab-bridge.exe for us, and the
-// bridge connects to the named pipe of the browser process that started it, so every browser
-// instance talks to its own module. Fallback: the module's WebSocket on 127.0.0.1, for
-// installs without the bridge. Both carry the same messages (AGENTS.md, "通信协议").
+// Chrome starts arbortab-bridge.exe for us, and the bridge connects to the named pipe of the
+// browser process that started it, so every browser instance talks to its own module. The
+// loopback WebSocket remains a native-only development endpoint and is not used by the extension.
 
 const NATIVE_HOST = 'com.arbortab.bridge';
-const PORTS = [47821, 47822, 47823, 47824, 47825];
 // Message protocol spoken by this extension. Must stay within the native module's
 // [protocolMin, protocolMax] (native/src/link/protocol.h); see AGENTS.md, "版本与兼容".
 export const PROTOCOL = 1;
@@ -47,10 +45,8 @@ export class NativeLink {
     this.onHello = onHello || (() => {});
     /** Connection milestones for diagnostics: (event, data). */
     this.onEvent = onEvent || (() => {});
-    /** Active connection: { transport: 'pipe'|'websocket', send(message), close() }. */
+    /** Active Native Messaging connection: { transport: 'pipe', send(message), close() }. */
     this.channel = null;
-    /** Bound WebSocket port when connected over WebSocket. */
-    this.port = null;
     /** Outcome of the last Native Messaging attempt: 'ok', 'missing', 'module-not-loaded', 'failed'. */
     this.bridge = null;
     this.features = { ...NO_FEATURES };
@@ -59,7 +55,6 @@ export class NativeLink {
     this.native = null;
     /** 'extension' or 'native' when the protocols do not overlap; nothing is sent then. */
     this.updateNeeded = null;
-    this.portIndex = 0;
     this.retryDelay = 500;
     this.heartbeat = null;
     this.queue = [];
@@ -89,13 +84,8 @@ export class NativeLink {
   }
 
   connect() {
-    if (this.stopped) {
-      return;
-    }
-    if (chrome.runtime.connectNative) {
+    if (!this.stopped) {
       this.connectBridge();
-    } else {
-      this.connectWebSocket();
     }
   }
 
@@ -105,7 +95,7 @@ export class NativeLink {
       port = chrome.runtime.connectNative(NATIVE_HOST);
     } catch (error) {
       this.bridge = bridgeFailure(String(error));
-      this.connectWebSocket();
+      this.scheduleReconnect();
       return;
     }
     let opened = false;
@@ -136,64 +126,11 @@ export class NativeLink {
         }
         return;
       }
-      // Never reached a module this way: an install without the bridge may still have the
-      // WebSocket endpoint.
       this.bridge = bridgeFailure(error, reason);
-      this.connectWebSocket();
+      this.scheduleReconnect();
     });
     // The bridge forwards this as soon as it reaches the pipe; the module answers with hello.
     port.postMessage(this.helloMessage());
-  }
-
-  connectWebSocket() {
-    if (this.stopped) {
-      return;
-    }
-    const port = PORTS[this.portIndex % PORTS.length];
-    let socket;
-    try {
-      socket = new WebSocket(`ws://127.0.0.1:${port}/arbortab`);
-    } catch {
-      this.scheduleReconnect();
-      return;
-    }
-    const channel = {
-      transport: 'websocket',
-      send: (message) => socket.send(JSON.stringify(message)),
-      close: () => socket.close(),
-    };
-    let failed = false;
-    socket.addEventListener('open', () => {
-      this.port = port;
-      this.portIndex = 0;
-      this.opened(channel);
-      this.send(this.helloMessage());
-    });
-    socket.addEventListener('message', (event) => {
-      let message;
-      try {
-        message = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      this.receive(message);
-    });
-    const onDown = () => {
-      if (failed) {
-        return;
-      }
-      failed = true;
-      if (this.channel === channel) {
-        this.down();
-      } else if (this.channel) {
-        return;  // another transport is live
-      }
-      // Try the next port on reconnect: the browser may have moved to another one.
-      this.portIndex += 1;
-      this.scheduleReconnect();
-    };
-    socket.addEventListener('close', onDown);
-    socket.addEventListener('error', onDown);
   }
 
   helloMessage() {
@@ -204,11 +141,11 @@ export class NativeLink {
     this.channel = channel;
     this.connected = true;
     this.retryDelay = 500;
-    this.onEvent('connected', { transport: channel.transport, port: this.port });
+    this.onEvent('connected', { transport: channel.transport });
     for (const message of this.queue.splice(0)) {
       this.send(message);
     }
-    // Keeps the service worker alive and detects a dead WebSocket.
+    // Keeps the service worker and Native Messaging host alive.
     this.heartbeat = setInterval(() => this.send({ type: 'ping' }), 20000);
     this.onStatus({ connected: true, features: this.features });
   }
@@ -220,7 +157,6 @@ export class NativeLink {
     this.onEvent('disconnected', { transport: this.channel.transport });
     this.channel = null;
     this.connected = false;
-    this.port = null;
     if (this.heartbeat) {
       clearInterval(this.heartbeat);
       this.heartbeat = null;

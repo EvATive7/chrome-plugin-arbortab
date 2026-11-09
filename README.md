@@ -123,6 +123,10 @@ Load `extension/` as an unpacked extension from `chrome://extensions` with Devel
 
 For the sandboxed dev loop, end-to-end tests and the debugging notes, see [AGENTS.md](AGENTS.md).
 
+## 🔒 Privacy
+
+ArborTab has no ads or analytics and does not upload browsing data. See the full [Privacy Policy](PRIVACY.md), including the local data the extension handles and the signed compatibility data downloaded by the optional native module.
+
 ## 📄 License
 
 [GPL-3.0-only](LICENSE)

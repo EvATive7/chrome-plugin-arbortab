@@ -1,6 +1,6 @@
 {
   "extensionName": { "message": "ArborTab" },
-  "extensionDescription": { "message": "Baumartige Tabverwaltung für die native vertikale Tableiste: einklappbare Teilbäume, Schließen mit Untertabs und Verschachteln per Drag-and-drop." },
+  "extensionDescription": { "message": "Baum-Tabs in der nativen vertikalen Tableiste: Teilbäume einklappen, mit Untertabs schließen und per Drag-and-drop verschachteln." },
   "commandToggleCollapsed": { "message": "Teilbaum des aktuellen Tabs ein- oder ausklappen" },
   "commandCloseTree": { "message": "Aktuellen Tab und seinen gesamten Teilbaum schließen" },
   "commandOutdent": { "message": "Aktuellen Tab eine Ebene nach oben verschieben" },
@@ -80,7 +80,6 @@
   "aboutProtocolValue": { "message": "Erweiterung $1 · Modul $2" },
   "aboutTransport": { "message": "Verbindung" },
   "transportPipe": { "message": "Native-Messaging-Brücke" },
-  "transportWebSocket": { "message": "WebSocket (ältere Installation: Installationsbefehl erneut ausführen)" },
   "aboutOffsets": { "message": "Offsets" },
   "offsetsReady": { "message": "Bereit" },
   "aboutLinks": { "message": "Projekt" },
