@@ -39,7 +39,16 @@ void* g_view_paint_original = nullptr;
 void* g_tab_layout_original = nullptr;
 void* g_icon_paint_original = nullptr;
 SetBoundsRectFn g_set_bounds_rect = nullptr;
-int g_last_active_tab = 0;
+
+// Whether each tab was active when it last painted. Tracked per tab, not as one "last active
+// tab": every window has its own active tab and a split view has two, so a single global
+// value flips on each paint, and since each flip repaints all strips the browser ends up
+// relaying out the strips forever. UI thread only.
+struct ActiveMark {
+  bool active = false;
+  ULONGLONG last_seen = 0;
+};
+std::unordered_map<int, ActiveMark> g_active_marks;
 
 // Favicon <-> chevron crossfade and the chevron's rotation (0 = pointing right / collapsed,
 // 1 = pointing down / expanded). UI thread only.
@@ -451,10 +460,19 @@ void PaintTabDecor(void* tab_view, void* canvas) {
   }
   // The indent guide of the active branch lives in the container: repaint it when the
   // active tab changes.
-  if (ReadBool(tab_view, g_offsets.tab_active) && tab_id != g_last_active_tab) {
-    g_last_active_tab = tab_id;
+  const ULONGLONG now = GetTickCount64();
+  if (g_active_marks.size() > 1024) {
+    for (auto it = g_active_marks.begin(); it != g_active_marks.end();) {
+      it = now - it->second.last_seen > 10000 ? g_active_marks.erase(it) : std::next(it);
+    }
+  }
+  const bool active = ReadBool(tab_view, g_offsets.tab_active);
+  auto [mark, inserted] = g_active_marks.try_emplace(tab_id);
+  if (active && (inserted || !mark->second.active)) {
     RequestAnimationFrame();
   }
+  mark->second.active = active;
+  mark->second.last_seen = now;
   const TabDisplayState state = GlobalState().Get(tab_id);
   // Hover changes repaint the tab but not necessarily its favicon child.
   bool target_changed = false;
