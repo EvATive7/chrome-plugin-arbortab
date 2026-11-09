@@ -109,15 +109,20 @@ def reload_extension() -> None:
     after loadUnpacked (AGENTS.md, pitfall 17): reload it so the current code runs."""
     import websocket  # noqa: PLC0415
 
+    # loadUnpacked may restart the worker right away: retry until one accepts the connection.
     for _ in range(50):
         targets = json.load(urllib.request.urlopen(f"http://127.0.0.1:{sandbox.PORT}/json"))
         worker = next((t for t in targets if t["type"] == "service_worker" and EXTENSION_ID in t["url"]), None)
         if worker:
-            break
+            try:
+                ws = websocket.create_connection(worker["webSocketDebuggerUrl"], timeout=10,
+                                                 suppress_origin=True)
+                break
+            except websocket.WebSocketException:
+                pass
         time.sleep(0.2)
     else:
         raise SystemExit("the extension's service worker did not start")
-    ws = websocket.create_connection(worker["webSocketDebuggerUrl"], timeout=10, suppress_origin=True)
     try:
         ws.send(json.dumps({"id": 1, "method": "Runtime.evaluate",
                             "params": {"expression": "chrome.runtime.reload()"}}))

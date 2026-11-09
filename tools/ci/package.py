@@ -61,7 +61,8 @@ def main() -> int:
     for script in ("install.ps1", "uninstall.ps1"):
         files.append(Path(shutil.copy(REPO / "packaging" / "windows" / script, args.out / script)))
     sums = "".join(f"{hashlib.sha256(f.read_bytes()).hexdigest()}  {f.name}\n" for f in files)
-    (args.out / "SHA256SUMS").write_text(sums, encoding="utf-8")
+    # LF even on Windows runners, so `sha256sum -c SHA256SUMS` works everywhere.
+    (args.out / "SHA256SUMS").write_text(sums, encoding="utf-8", newline="\n")
     print(sums, end="")
     return 0
 
