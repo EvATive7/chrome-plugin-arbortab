@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag vX.Y.Z (equal to VERSION and the manifest version) to build a draft release.
+# Push a tag vX.Y.Z (equal to VERSION and the manifest version) to publish a release.
 on:
   push:
     tags: ['v*']
@@ -39,11 +39,10 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # A draft: the release notes and the manual drag check (AGENTS.md) come before publishing.
-      - name: Create draft release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $assets = Get-ChildItem dist -File | ForEach-Object FullName
-          gh release create '${{ github.ref_name }}' $assets --draft --generate-notes --title "ArborTab ${{ github.ref_name }}"
+          gh release create '${{ github.ref_name }}' $assets --latest --generate-notes --title "ArborTab ${{ github.ref_name }}"

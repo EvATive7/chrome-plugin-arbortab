@@ -26,7 +26,7 @@ tools/
   dev/              本地开发：build-native.ps1、dev.py/dev.ps1（一键重建+重启沙盒）、sandbox.py、nativecheck.py
   re/               逆向/符号：pdbinfo.py、symq.py、dis.py
   test/             e2e.py（沙盒 Chrome 中的端到端检查）
-.github/workflows/  ci.yml（检查+构建）、release.yml（tag → 草稿 Release）、offsets.yml（每 6 小时发布新版 Chrome 的偏移量）
+.github/workflows/  ci.yml（检查+构建）、release.yml（tag → 正式 Release）、offsets.yml（每 6 小时发布新版 Chrome 的偏移量）
 artifacts/ build/   本地产物（已 gitignore）
 ```
 
@@ -74,7 +74,7 @@ uv run --with cryptography python tools/ci/offsets_sign.py revoke <root> <文件
 - **失败即不改动**：偏移量、协议、身份任一校验不通过，原生功能整体关闭、标签栏保持原样，并通过 `status` 让设置页说明原因。不要为了“能用”放宽校验。
 - 用户可见文案改动要同步 `extension/_locales/` 全部 8 种语言，`check_repo.py` 会检查键是否一致。
 - 代码与注释用英文；文档用中文。
-- 涉及标签栏坐标、真实鼠标拖拽的行为无法可靠自动化（见踩坑 13），改动后需人工在沙盒里验证一次；其余逻辑用 `e2e.py` 的测试钩子（`arbortab.__testDrop` 等）覆盖。
+- 涉及标签栏坐标、真实鼠标拖拽的行为无法可靠自动化（见踩坑 13）；可按需在沙盒里人工验证，其余逻辑用 `e2e.py` 的测试钩子（`arbortab.__testDrop` 等）覆盖。
 
 ## 版本与兼容
 
@@ -132,7 +132,7 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
 
 ## 发布与分发
 
-- **流程**：改 `VERSION` 与 manifest → 合入 main（`ci.yml` 通过）→ 推 `vX.Y.Z` tag → `release.yml` 构建并创建**草稿** Release（扩展 zip、原生 zip、单独的 install.ps1/uninstall.ps1、SHA256SUMS）→ 在沙盒里人工验证真实拖拽 → 发布草稿。
+- **流程**：改 `VERSION` 与 manifest → 合入 main（`ci.yml` 通过）→ 推 `vX.Y.Z` tag → `release.yml` 构建并直接发布正式 Release（扩展 zip、原生 zip、单独的 install.ps1/uninstall.ps1、SHA256SUMS）。
 - **前提**：仓库 secret `OFFSETS_SIGNING_KEY` 已设置（没有它 offsets 工作流会失败，DLL 也拿不到可用的偏移量）。
 - **用户安装方式**：设置页（未连接或需要更新时）给出一行命令，README 里也有同一行：
 
