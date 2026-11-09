@@ -66,6 +66,8 @@
   "offsetsErrorDetail": { "message": "Les données de compatibilité pour Chrome $1 n’ont pas passé la validation : les onglets restent inchangés. Voir native.log pour les détails." },
   "updateNativeDetail": { "message": "Cette extension nécessite un module natif plus récent. Téléchargez le dernier paquet et réinstallez-le." },
   "updateExtensionDetail": { "message": "Le module natif nécessite une extension plus récente. Mettez ArborTab à jour depuis chrome://extensions." },
+  "statusUpdateAvailable": { "message": "Mise à jour disponible" },
+  "updateAvailableDetail": { "message": "Le module natif $1 est plus ancien que l’extension ($2) et peut manquer de corrections. Relancez la commande ci-dessous pour le mettre à jour ; quittez Chrome quand l’installateur le demande." },
   "unknown": { "message": "Inconnu" },
   "backgroundNoAnswer": { "message": "Le processus d’arrière-plan n’a pas répondu." },
   "closeSubtreeTitle": { "message": "Fermer le sous-arbre ?" },

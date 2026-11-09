@@ -66,6 +66,8 @@
   "offsetsErrorDetail": { "message": "The compatibility data for Chrome $1 failed validation, so tabs stay unchanged. See native.log for details." },
   "updateNativeDetail": { "message": "This extension needs a newer native module. Download the latest package and install it again." },
   "updateExtensionDetail": { "message": "The native module needs a newer extension. Update ArborTab on chrome://extensions." },
+  "statusUpdateAvailable": { "message": "Update available" },
+  "updateAvailableDetail": { "message": "Native module $1 is older than the extension ($2) and may be missing fixes. Run the command below again to update; quit Chrome when the installer asks." },
   "unknown": { "message": "Unknown" },
   "backgroundNoAnswer": { "message": "The background worker did not answer." },
   "closeSubtreeTitle": { "message": "Close subtree?" },

@@ -2,7 +2,12 @@
 // display state to the native module.
 
 import * as tree from './tree.js';
-import { NativeLink, PROTOCOL } from './native-link.js';
+import {
+  NativeLink,
+  PROTOCOL,
+  nativeOutdated,
+  nativeUpdatePromptDecision,
+} from './native-link.js';
 import { record, recentEvents, treeSummary } from './diagnostics.js';
 
 const DEFAULT_CONFIG = {
@@ -19,6 +24,9 @@ const DEFAULT_CONFIG = {
 const LEGACY_HIGHLIGHT_COLORS = new Set(['#663D7EFF', '#998B5CF6']);
 
 const SESSION_KEY = 'arbortab.windows';
+const NATIVE_UPDATE_PROMPTS_KEY = 'arbortab.nativeUpdatePrompts';
+const INITIAL_INSTALL_PENDING_KEY = 'arbortab.initialInstallPending';
+const NATIVE_UPDATE_DELAY_MS = 5000;
 
 /** @type {Map<number, ReturnType<typeof tree.createWindowState>>} */
 let windows = new Map();
@@ -32,6 +40,8 @@ let stateVersion = 0;
 let lastSentVersion = -1;
 let sendTimer = null;
 let initialized = null;
+let initialInstall = false;
+const scheduledNativeUpdatePrompts = new Set();
 
 const link = new NativeLink({
   onMessage: handleNativeMessage,
@@ -43,6 +53,7 @@ const link = new NativeLink({
     }
   },
   onEvent: record,
+  onHandshake: (message) => scheduleNativeUpdatePrompt(message.nativeVersion),
   onHello: (message) => {
     link.nativeVersion = message.nativeVersion;
     lastSentVersion = -1;
@@ -143,6 +154,12 @@ function isTreeTab(tab) {
   return Boolean(tab) && !tab.pinned && (tab.groupId === undefined || tab.groupId === -1);
 }
 
+function isExtensionRootTab(tab) {
+  return (tab?.pendingUrl || tab?.url || '').startsWith(
+    chrome.runtime.getURL('src/options/options.html'),
+  );
+}
+
 async function syncWindow(windowId) {
   const tabs = await chrome.tabs.query({ windowId });
   tabs.sort((a, b) => a.index - b.index);
@@ -233,6 +250,7 @@ async function onCreated(createdTab) {
     ? siblings.find((candidate) => candidate.id === tab.openerTabId)
     : null;
   const nestUnderOpener = opener && isTreeTab(tab) && isTreeTab(opener)
+    && !isExtensionRootTab(tab)
     && (config.newTabButtonIsChild || !isNewTabPage(tab));
   if (nestUnderOpener) {
     tree.attachAsLastChild(state, tab.id, opener.id);
@@ -595,6 +613,90 @@ async function commandIndent() {
 }
 
 // ---------------------------------------------------------------------------------------
+// Native update reminder
+// ---------------------------------------------------------------------------------------
+
+async function openNativeUpdateSettings(normalWindows) {
+  const normalWindowIds = new Set(normalWindows.map((window) => window.id));
+  const optionsUrl = chrome.runtime.getURL('src/options/options.html');
+  const targetUrl = `${optionsUrl}?reason=native-update#native`;
+  const existing = (await chrome.tabs.query({})).find((tab) =>
+    normalWindowIds.has(tab.windowId)
+      && (tab.pendingUrl || tab.url || '').startsWith(optionsUrl),
+  );
+  if (existing) {
+    const currentUrl = existing.pendingUrl || existing.url || '';
+    if (currentUrl === targetUrl) {
+      // Reload so an already-open reminder runs its scroll/highlight entrance again.
+      await chrome.tabs.reload(existing.id);
+      await chrome.tabs.update(existing.id, { active: true });
+    } else {
+      await chrome.tabs.update(existing.id, { active: true, url: targetUrl });
+    }
+    await chrome.windows.update(existing.windowId, { focused: true });
+    return;
+  }
+  const target = normalWindows.find((window) => window.focused) || normalWindows[0];
+  // Deliberately omit openerTabId: the reminder must be a root in ArborTab's tree.
+  await chrome.tabs.create({ active: true, windowId: target.id, url: targetUrl });
+}
+
+function scheduleNativeUpdatePrompt(nativeVersion) {
+  const extensionVersion = chrome.runtime.getManifest().version;
+  const candidateKey = `${extensionVersion}|${nativeVersion}`;
+  if (scheduledNativeUpdatePrompts.has(candidateKey)) {
+    return;
+  }
+  scheduledNativeUpdatePrompts.add(candidateKey);
+  setTimeout(async () => {
+    try {
+      const normalWindows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+      if (!normalWindows.length) {
+        return;
+      }
+      const stored = await chrome.storage.local.get([
+        NATIVE_UPDATE_PROMPTS_KEY,
+        INITIAL_INSTALL_PENDING_KEY,
+      ]);
+      const shownKeys = Array.isArray(stored[NATIVE_UPDATE_PROMPTS_KEY])
+        ? stored[NATIVE_UPDATE_PROMPTS_KEY]
+        : [];
+      const installPending = initialInstall
+        || stored[INITIAL_INSTALL_PENDING_KEY] === extensionVersion;
+      const decision = nativeUpdatePromptDecision({
+        nativeVersion,
+        extensionVersion,
+        shownKeys,
+        initialInstall: installPending,
+      });
+      if (installPending) {
+        // Suppress only the version pair observed after installation. A later change on either
+        // side produces a new key and may remind normally.
+        await chrome.storage.local.set({
+          [NATIVE_UPDATE_PROMPTS_KEY]: [...new Set([...shownKeys, decision.key])],
+        });
+        await chrome.storage.local.remove(INITIAL_INSTALL_PENDING_KEY);
+        initialInstall = false;
+        return;
+      }
+      if (!decision.shouldOpen) {
+        return;
+      }
+      // Persist before opening so a worker/browser restart cannot open this pair twice.
+      await chrome.storage.local.set({
+        [NATIVE_UPDATE_PROMPTS_KEY]: [...new Set([...shownKeys, decision.key])],
+      });
+      await openNativeUpdateSettings(normalWindows);
+      record('nativeUpdatePromptOpened', { key: decision.key });
+    } catch (error) {
+      record('nativeUpdatePromptFailed', { error: String(error) });
+    } finally {
+      scheduledNativeUpdatePrompts.delete(candidateKey);
+    }
+  }, NATIVE_UPDATE_DELAY_MS);
+}
+
+// ---------------------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------------------
 
@@ -672,6 +774,8 @@ function nativeStatus() {
     protocolMin: link.native?.protocolMin ?? null,
     protocolMax: link.native?.protocolMax ?? null,
     updateNeeded: link.updateNeeded,
+    // A newer native release exists for this extension; a hint, not a compatibility check.
+    nativeOutdated: nativeOutdated(link.native?.nativeVersion, chrome.runtime.getManifest().version),
     safeMode: link.native?.safeMode ?? null,
     transport: link.transport,
     bridge: link.bridge,
@@ -714,7 +818,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-chrome.runtime.onInstalled.addListener(() => void ensureInit());
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install') {
+    initialInstall = true;
+    void chrome.storage.local.set({
+      [INITIAL_INSTALL_PENDING_KEY]: chrome.runtime.getManifest().version,
+    });
+  }
+  void ensureInit();
+});
 chrome.runtime.onStartup.addListener(() => void ensureInit());
 
 // Exposed for the extension's own options page and for sandbox tests.

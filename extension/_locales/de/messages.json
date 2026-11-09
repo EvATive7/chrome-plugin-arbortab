@@ -66,6 +66,8 @@
   "offsetsErrorDetail": { "message": "Die Kompatibilitätsdaten für Chrome $1 haben die Prüfung nicht bestanden, daher bleiben die Tabs unverändert. Details stehen in native.log." },
   "updateNativeDetail": { "message": "Diese Erweiterung braucht ein neueres natives Modul. Lade das aktuelle Paket herunter und installiere es erneut." },
   "updateExtensionDetail": { "message": "Das native Modul braucht eine neuere Erweiterung. Aktualisiere ArborTab unter chrome://extensions." },
+  "statusUpdateAvailable": { "message": "Update verfügbar" },
+  "updateAvailableDetail": { "message": "Das native Modul $1 ist älter als die Erweiterung ($2) und enthält möglicherweise nicht alle Fehlerbehebungen. Führe den Befehl unten erneut aus, um es zu aktualisieren; beende Chrome, wenn das Installationsprogramm danach fragt." },
   "unknown": { "message": "Unbekannt" },
   "backgroundNoAnswer": { "message": "Der Hintergrundprozess hat nicht geantwortet." },
   "closeSubtreeTitle": { "message": "Teilbaum schließen?" },

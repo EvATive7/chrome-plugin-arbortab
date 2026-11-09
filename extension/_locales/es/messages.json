@@ -66,6 +66,8 @@
   "offsetsErrorDetail": { "message": "Los datos de compatibilidad para Chrome $1 no superaron la validación, así que las pestañas no cambian. Consulta native.log para más detalles." },
   "updateNativeDetail": { "message": "Esta extensión necesita un módulo nativo más reciente. Descarga el paquete más reciente e instálalo de nuevo." },
   "updateExtensionDetail": { "message": "El módulo nativo necesita una extensión más reciente. Actualiza ArborTab en chrome://extensions." },
+  "statusUpdateAvailable": { "message": "Actualización disponible" },
+  "updateAvailableDetail": { "message": "El módulo nativo $1 es anterior a la extensión ($2) y puede que le falten correcciones. Vuelve a ejecutar el comando de abajo para actualizarlo; cierra Chrome cuando el instalador lo pida." },
   "unknown": { "message": "Desconocido" },
   "backgroundNoAnswer": { "message": "El proceso en segundo plano no respondió." },
   "closeSubtreeTitle": { "message": "¿Cerrar subárbol?" },

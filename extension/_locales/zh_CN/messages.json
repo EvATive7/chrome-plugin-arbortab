@@ -66,6 +66,8 @@
   "offsetsErrorDetail": { "message": "Chrome $1 的兼容数据未通过校验，标签页将保持不变。详情见 native.log。" },
   "updateNativeDetail": { "message": "此扩展需要更新版本的原生模块。请下载最新安装包并重新安装。" },
   "updateExtensionDetail": { "message": "原生模块需要更新版本的扩展。请在 chrome://extensions 中更新 ArborTab。" },
+  "statusUpdateAvailable": { "message": "有可用更新" },
+  "updateAvailableDetail": { "message": "原生模块 $1 比扩展（$2）旧，可能缺少新版的修复。再次运行下面的命令即可更新；安装程序提示时请退出 Chrome。" },
   "unknown": { "message": "未知" },
   "backgroundNoAnswer": { "message": "后台工作线程没有响应。" },
   "closeSubtreeTitle": { "message": "关闭子树？" },

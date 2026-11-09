@@ -277,16 +277,24 @@ function renderNativeStatus(reply) {
               reply.updateNeeded === 'native' ? 'updateNativeDetail' : 'updateExtensionDetail');
     return;
   }
+  // An older native release still works, but may lack fixes: the install command stays in
+  // view whatever the other states say, which keep their own pill and explanation.
+  const outdated = Boolean(reply.nativeOutdated);
   if (reply.safeMode?.active) {
-    showSetup(false, true);
+    showSetup(outdated, true);
     setStatus('bad', 'statusSafeMode', 'safeModeDetail', [String(reply.safeMode.crashes)]);
     return;
   }
-  showSetup(false);
+  showSetup(outdated);
   const offsets = reply.offsets?.status ?? 'ready';
   if (OFFSETS_STATES[offsets]) {
     const [state, label, detail] = OFFSETS_STATES[offsets];
     setStatus(state, label, detail, [reply.offsets?.chromeVersion || '?']);
+    return;
+  }
+  if (outdated) {
+    setStatus('wait', 'statusUpdateAvailable', 'updateAvailableDetail',
+              [reply.nativeVersion, chrome.runtime.getManifest().version]);
     return;
   }
   setStatus('ok', 'connected', 'nativeConnectedDetail');
@@ -374,10 +382,30 @@ $('debug-download').addEventListener('click', async () => {
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 });
 
+function showNativeUpdateTarget() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('reason') !== 'native-update') {
+    return;
+  }
+  const heading = $('native');
+  const card = $('native-card');
+  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  heading.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
+  card.classList.add('native-update-highlight');
+  if (reducedMotion) {
+    setTimeout(() => card.classList.remove('native-update-highlight'), 2400);
+  } else {
+    card.addEventListener('animationend', () => {
+      card.classList.remove('native-update-highlight');
+    }, { once: true });
+  }
+}
+
 async function load() {
   const stored = await chrome.storage.sync.get('config');
   config = withDefaults(stored?.config);
   render();
+  showNativeUpdateTarget();
   void reportNativeStatus();
   // The module's state changes on its own (offsets arrive, Chrome restarts): keep it live.
   setInterval(() => void reportNativeStatus(), 3000);

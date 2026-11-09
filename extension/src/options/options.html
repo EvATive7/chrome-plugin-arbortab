@@ -55,6 +55,29 @@
           0 1px 3px color-mix(in srgb, #000 8%, transparent);
         overflow: hidden;
       }
+      .card.native-update-highlight {
+        animation: native-update-highlight 2.4s ease-out;
+      }
+      @keyframes native-update-highlight {
+        0%, 35% {
+          box-shadow:
+            0 0 0 3px var(--accent),
+            0 4px 14px color-mix(in srgb, var(--accent) 28%, transparent);
+        }
+        100% {
+          box-shadow:
+            0 0 0 1px color-mix(in srgb, var(--line) 60%, transparent),
+            0 1px 3px color-mix(in srgb, #000 8%, transparent);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .card.native-update-highlight {
+          animation: none;
+          box-shadow:
+            0 0 0 3px var(--accent),
+            0 4px 14px color-mix(in srgb, var(--accent) 28%, transparent);
+        }
+      }
 
       /* Rows: label column on the left, one control on the right. */
       .row {
@@ -558,8 +581,8 @@
     <main>
       <h1><img src="../../icons/logo.svg" alt="" width="36" height="36" />ArborTab</h1>
 
-      <h2 data-i18n="nativeModule">Native module</h2>
-      <section class="card">
+      <h2 id="native" data-i18n="nativeModule">Native module</h2>
+      <section class="card" id="native-card">
         <div class="row">
           <div class="label">
             <span data-i18n="nativeStatus">Status</span>

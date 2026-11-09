@@ -27,6 +27,45 @@ export function protocolMismatch(message) {
 }
 
 /**
+ * True when the module's release is older than the extension's. Only a hint for the settings
+ * page: compatibility is decided by the protocol alone, and an unreadable version never
+ * counts as outdated.
+ */
+export function nativeOutdated(nativeVersion, extensionVersion) {
+  const parse = (version) => {
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(version ?? ''));
+    return match ? match.slice(1).map(Number) : null;
+  };
+  const native = parse(nativeVersion);
+  const extension = parse(extensionVersion);
+  if (!native || !extension) {
+    return false;
+  }
+  for (let index = 0; index < 3; index += 1) {
+    if (native[index] !== extension[index]) {
+      return native[index] < extension[index];
+    }
+  }
+  return false;
+}
+
+/** Pure decision used before showing the one-time settings reminder. */
+export function nativeUpdatePromptDecision({
+  nativeVersion,
+  extensionVersion,
+  shownKeys = [],
+  initialInstall = false,
+}) {
+  const key = `${extensionVersion}|${nativeVersion}`;
+  return {
+    key,
+    shouldOpen: nativeOutdated(nativeVersion, extensionVersion)
+      && !initialInstall
+      && !shownKeys.includes(key),
+  };
+}
+
+/**
  * Why a Native Messaging attempt ended before the module answered: 'missing' (the bridge is
  * not registered), 'module-not-loaded' (bridge ran, but this browser has no module), or
  * 'failed' (anything else).
@@ -39,9 +78,12 @@ export function bridgeFailure(lastErrorMessage, bridgeReason) {
 }
 
 export class NativeLink {
-  constructor({ onMessage, onStatus, onHello, onEvent } = {}) {
+  constructor({ onMessage, onStatus, onHandshake, onHello, onEvent } = {}) {
     this.onMessage = onMessage || (() => {});
     this.onStatus = onStatus || (() => {});
+    /** Every hello, including one whose protocol is incompatible. */
+    this.onHandshake = onHandshake || (() => {});
+    /** A hello whose protocol is compatible and may start normal extension/native work. */
     this.onHello = onHello || (() => {});
     /** Connection milestones for diagnostics: (event, data). */
     this.onEvent = onEvent || (() => {});
@@ -180,8 +222,11 @@ export class NativeLink {
         features: this.features,
         ...(this.updateNeeded ? { updateNeeded: this.updateNeeded } : {}),
       });
-      if (message.type === 'hello' && !this.updateNeeded) {
-        this.onHello(message);
+      if (message.type === 'hello') {
+        this.onHandshake(message);
+        if (!this.updateNeeded) {
+          this.onHello(message);
+        }
       }
       this.onStatus({ connected: true, features: this.features, nativeVersion: message.nativeVersion });
       return;

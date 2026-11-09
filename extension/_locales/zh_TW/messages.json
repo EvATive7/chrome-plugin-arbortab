@@ -66,6 +66,8 @@
   "offsetsErrorDetail": { "message": "Chrome $1 的相容性資料未通過驗證，分頁將保持不變。詳情請見 native.log。" },
   "updateNativeDetail": { "message": "此擴充功能需要較新版本的原生模組。請下載最新安裝包並重新安裝。" },
   "updateExtensionDetail": { "message": "原生模組需要較新版本的擴充功能。請在 chrome://extensions 更新 ArborTab。" },
+  "statusUpdateAvailable": { "message": "有可用更新" },
+  "updateAvailableDetail": { "message": "原生模組 $1 比擴充功能（$2）舊，可能缺少新版的修正。再次執行下方的命令即可更新；安裝程式提示時請結束 Chrome。" },
   "unknown": { "message": "未知" },
   "backgroundNoAnswer": { "message": "背景工作程序沒有回應。" },
   "closeSubtreeTitle": { "message": "關閉子樹？" },

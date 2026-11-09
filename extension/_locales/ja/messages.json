@@ -66,6 +66,8 @@
   "offsetsErrorDetail": { "message": "Chrome $1 の互換性データが検証に失敗したため、タブはそのままです。詳しくは native.log を確認してください。" },
   "updateNativeDetail": { "message": "この拡張機能には新しいネイティブモジュールが必要です。最新のパッケージをダウンロードして再インストールしてください。" },
   "updateExtensionDetail": { "message": "ネイティブモジュールには新しい拡張機能が必要です。chrome://extensions で ArborTab を更新してください。" },
+  "statusUpdateAvailable": { "message": "アップデートあり" },
+  "updateAvailableDetail": { "message": "ネイティブモジュール $1 は拡張機能（$2）より古く、修正が含まれていない可能性があります。下のコマンドをもう一度実行して更新してください。インストーラーに求められたら Chrome を終了してください。" },
   "unknown": { "message": "不明" },
   "backgroundNoAnswer": { "message": "バックグラウンドワーカーから応答がありません。" },
   "closeSubtreeTitle": { "message": "サブツリーを閉じますか？" },
