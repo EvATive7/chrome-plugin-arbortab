@@ -224,6 +224,7 @@ git sparse-checkout set --no-cone <目录...>
 17. **沙盒重启后扩展可能还在跑旧代码**：版本号不变时，Chrome 会沿用缓存的 service worker 脚本，`Extensions.loadUnpacked` 同一路径也不会刷新。改了扩展代码后，先在 service worker 里执行 `chrome.runtime.reload()` 再测；否则测试可能对着旧代码通过。
 18. **spec 加了 DLL 依赖的条目却没升 schema，旧文件会被“合法地”接受**：schema 1 时期发布的 156 文件缺少后来加的字段，新 DLL 照样加载，结果 layout/twisty 静默关闭；本机缓存是新生成的，开发时完全看不出来。已因此升到 schema 2。改 spec 时按“偏移量”一节判断是否升号，并用一次真实下载（删掉本地缓存）验证。
 19. **签名要覆盖 git 存储的字节**：Windows runner 默认 `core.autocrlf=true`，签的是 CRLF 的工作区副本，GitHub 发的却是 LF，于是全部验签失败。offsets 工作流已关掉 autocrlf，分支上有 `* -text`；在本机操作 offsets 分支时同样用 `git -c core.autocrlf=false`。另外 raw.githubusercontent.com 有约 5 分钟缓存，刚推送的文件要等一会儿才能下到。
+20. **CDP `Extensions.loadUnpacked` 加载的扩展不会跨重启保留**：不经 `dev.ps1` 直接重启沙盒（比如测安装脚本后），浏览器里根本没有扩展，看起来像“连不上”。这种测试要在启动后再加载一次扩展。
 
 ## 符号与偏移核对经验
 
