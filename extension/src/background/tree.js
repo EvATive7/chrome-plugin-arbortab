@@ -228,8 +228,28 @@ export function attachSubtreeAsRoot(state, tabId, nodes) {
 }
 
 /**
+ * Takes `tabId` out of the tree structure (it became pinned, grouped or split): its children
+ * are promoted into its slot, and the tab itself becomes a root. Call adoptOrder afterwards to
+ * put the new root back at its strip position.
+ */
+export function promoteOut(state, tabId) {
+  const node = state.nodes.get(tabId);
+  const children = node ? [...node.children] : [];
+  if (node) {
+    node.children = [];
+    node.collapsed = false;
+  }
+  const list = siblingsOf(state, parentOf(state, tabId));
+  const index = list.indexOf(tabId);
+  list.splice(index < 0 ? list.length : index + 1, 0, ...children);
+  attachAsLastChild(state, tabId, null);
+}
+
+/**
  * Re-derives sibling order from the real strip order without changing any parent relation.
  * Used when Chrome reorders tabs behind our back (native drag we did not intercept).
+ * Tabs the tree does not know yet become roots at their strip position, not at the end: a tab
+ * Chrome placed inside a tab group or next to a split view has to stay there.
  */
 export function adoptOrder(state, liveTabIds) {
   const live = new Set(liveTabIds);
@@ -237,6 +257,17 @@ export function adoptOrder(state, liveTabIds) {
   for (const id of [...state.nodes.keys()]) {
     if (!live.has(id)) {
       state.nodes.delete(id);
+    }
+  }
+  const listed = new Set(state.roots);
+  for (const node of state.nodes.values()) {
+    for (const id of node.children) {
+      listed.add(id);
+    }
+  }
+  for (const id of liveTabIds) {
+    if (!listed.has(id)) {
+      state.roots.push(id);
     }
   }
   const seen = new Set();
