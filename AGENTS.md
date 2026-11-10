@@ -191,7 +191,7 @@ git sparse-checkout set --no-cone <目录...>
 ### 逆向小工具（`tools/re/`）
 
 - `pdbinfo.py`：读 chrome.dll 的 PDB key。`uv run --with pefile python -I tools/re/pdbinfo.py <chrome.dll>`
-- `symq.py`：dbghelp 查询。`sym <通配名>` 查符号（设 `RAW=1` 时按修饰名查）、`type <类型名>` 查字段偏移。`uv run python -I tools/re/symq.py <pdb> sym|type ...`
+- `symq.py`：dbghelp 查询。`sym <通配名>` 查符号（设 `RAW=1` 时按修饰名查）、`type <类型名>` 查字段偏移、`addr <RVA>` 把 chrome.dll RVA 反查成函数名（如风暴报告里的调用栈）。`uv run python -I tools/re/symq.py <pdb> sym|type|addr ...`
 - `dis.py`：查看指定 RVA 的机器指令。`uv run --with pefile --with capstone python -I tools/re/dis.py <dll> 0xRVA:len`
 
 ## 已实测的事实
@@ -231,6 +231,10 @@ git sparse-checkout set --no-cone <目录...>
 19. **签名要覆盖 git 存储的字节**：Windows runner 默认 `core.autocrlf=true`，签的是 CRLF 的工作区副本，GitHub 发的却是 LF，于是全部验签失败。offsets 工作流已关掉 autocrlf，分支上有 `* -text`；在本机操作 offsets 分支时同样用 `git -c core.autocrlf=false`。另外 raw.githubusercontent.com 有约 5 分钟缓存，刚推送的文件要等一会儿才能下到。
 20. **CDP `Extensions.loadUnpacked` 加载的扩展不会跨重启保留**：不经 `dev.ps1` 直接重启沙盒（比如测安装脚本后），浏览器里根本没有扩展，看起来像“连不上”。这种测试要在启动后再加载一次扩展。
 21. **绘制回调里的“变化检测”不能用全局单值**：`TabView::active_` 来自 `IsTabInForeground`，每个窗口各有一个、分屏时同一窗口有两个。0.2.0 用一个全局“上次激活的标签”判断变化，两个激活标签交替绘制时它每帧都在变，每次变化又刷新所有标签栏 → 布局风暴（约 1500 次/秒），表现为标签栏抖动、浏览器卡死。状态要按标签（或按容器）记录。另外沙盒窗口被完全遮挡时 Chrome 不绘制，这类问题测不出来：测绘制相关的循环前先让窗口可见（`document.visibilityState`），再用 `debug.report` 的 `stats.layoutCalls` 看空闲时的调用速率是否归零。
+22. **原生端看不到顺序变化**：`StateStore::ReplaceAll` 只比较每个标签的 depth/hidden 等显示状态，不比较顺序。扩展与 Chrome（或其它扩展）来回 `tabs.move` 时，`native.log` 里一条 `state update` 都没有，但 Chrome 在不停移动、动画，标签栏乱跳。现在 `debug.report` 有 `stats.stateReorders`（只改了顺序的快照数），扩展的调试信息有 `order` 计数。0.3.0 的用户日志里出现过这种无状态变化、持续到强杀浏览器的布局风暴（窗口满 14 个标签后开始，每秒数百次），根因未确认，因此加了风暴检测（见“开发与测试方法”）。
+23. **`tabs.move` 把标签移进分屏中间会直接拆掉分屏**（156 实测）；移进标签组中间同理会改变组成员。固定、成组、分屏的标签都不在树里（`isTreeTab`），没有父也没有子，扩展从不移动它们；树里还不认识的新标签按它在标签栏里的实际位置成为根，而不是追加到末尾（否则从组里打开的标签会被拖出组）。
+24. **短时突发不等于风暴**：开一个标签时 Chrome 每帧要算几十次布局，加上动画，调用速率会到约 2000 次/秒，持续 0.3–2 秒后归零，这是正常的。风暴检测因此要求连续 5 秒超过 300 次/秒。
+25. **布局调用栈可以跨进程比对**：同一调用路径的栈帧布局固定，`result=` 地址的低 16 位、以及两条路径之间的地址差在不同进程里都一样，可用来在沙盒里认出用户日志里的调用路径。
 
 ## 符号与偏移核对经验
 
@@ -269,6 +273,9 @@ git sparse-checkout set --no-cone <目录...>
   - 改了 `extension/` 后要重跑 `dev.ps1`（可加 `-NoBuild`）；在 `chrome://extensions` 里点“重新加载”只会重载旧副本。
   - 旧版 `dev.ps1` 会把正式宿主项改指向沙盒；从旧版升级的开发机要把它改回 `%LOCALAPPDATA%\ArborTab\bridge\com.arbortab.bridge.json`（或重新运行安装脚本）。
 - **用户侧诊断**：扩展在 service worker 内存里保留最近 200 条事件（`diagnostics.js`：连接、断开、hello/status、消息处理失败），设置页“关于与诊断”可复制或下载调试信息：扩展侧（版本、连接方式与偏移量状态、设置、树的规模、事件）加上原生侧的 `debug.report`（含 `native.log` 末尾 120 行），**不含网址和标题**。新增事件或字段时保持这一点。`native.log` 超过 1MB 轮转，保留 3 份旧文件。
+  - 本机所有装了 DLL 的浏览器进程（正式 Chrome、沙盒、打开链接时一闪而过的 chrome.exe）写同一个 `native.log`，看日志时按 `attached to browser process <pid>` 分段。开发工具按端口顺序连 WebSocket 端点，本机正式 Chrome 开着时 47821 往往是它：要断言沙盒就先核对 `debug.report` 的 `pid`。
+  - **布局风暴**：布局回调连续 5 秒超过 300 次/秒时，`native.log` 记一条 `layout storm`（当时自己的动画是否在跑、是否在拖拽、只改顺序的快照数）和最多 4 条不同的调用栈（chrome.dll RVA），结束时再记一条；`debug.report` 的 `stats.layoutStorms` 计次，`lastLayoutStorm` 保存最近一次（时长、调用数、峰值、调用栈）。调用栈用 `symq.py addr` 反查。
+  - **顺序收敛**：调试信息的 `order` 是扩展重排的计数（请求、移动、被 Chrome 改位、onMoved 次数、暂停次数）；事件 `orderLoopPaused`（附窗口里固定/成组/分屏标签数）、`orderMoveRefused`。
 - **自动化断言**：CDP 附加到扩展 service worker，调用 `arbortab.getState()` 读树（`windows[id] = {order, parents, collapsed}`）；原生侧用 `debug.layout` 取布局快照，回复里的 `stats.dropTarget` / `stats.dropZone` 可直接断言落点，不必截图。
 - **截图核对**：`sandbox.py shot <png>` 按窗口矩形截图，人工核对。
 - **崩溃分析**：沙盒配置目录下 `Crashpad\reports\*.dmp` 用 `cdb -z <dmp> -c ".ecxr; r; kn"` 查看；旧版 cdb 读不了新 PDB，地址可用 `symq.py` 反查。事件查看器的 Application 日志里也有崩溃记录。
@@ -279,5 +286,6 @@ git sparse-checkout set --no-cone <目录...>
 - 顺序 = 树的前序遍历，不单独存顺序，所以永远自洽、不需要 `normalize()` 之类的修复。
 - 结构操作只有两种，都由扩展执行：改父（`attachAsLastChild`）、换兄弟位置（`insertSibling`，父节点不变）。
 - **不要**让 Chrome 自由重排后再从落点索引反推父节点——这是旧方案树错乱的来源。`tabs.onMoved` 只重算兄弟顺序（`adoptOrder`）、父关系不动，再用 `tabs.move` 把前序顺序收敛回来。
+- **收敛（`applyOrder`）**：每个窗口同时只跑一轮，期间的新请求合并成再跑一轮；每步重新读标签栏，只把“没紧跟在前序前驱后面”的树内标签挪到前驱后面，从不移动固定/成组/分屏标签。Chrome 没把标签放到要求的位置就停下（不和 Chrome 较劲）；10 秒内超过 150 次移动说明有别的东西在反向移动，暂停该窗口 30 秒。
 - **被拖的是哪个标签**由 `TabView::OnMousePressed` 记录，随 `dragBegin` / `dropOnto` 一起传递；不要用“当前激活标签”去猜。
 - 拖拽期间临时折叠被拖的展开父标签，`dragEnd` 后恢复；`dropOnto` 拒绝把父节点放进自己的后代。

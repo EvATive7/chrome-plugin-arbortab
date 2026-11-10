@@ -1,5 +1,6 @@
 #include "features/layout.h"
 
+#include <algorithm>
 #include <atomic>
 #include <exception>
 #include <cstring>
@@ -52,6 +53,11 @@ volatile LONG g_horizontal_skips = 0;
 volatile LONG g_empty_skips = 0;
 volatile LONG g_max_children = 0;
 volatile LONG g_faults = 0;
+// Whether the last rewrite still had a tween (or a grace period) running. UI thread only.
+bool g_last_animating = false;
+// chrome.dll image range, for turning stack frames into RVAs.
+uintptr_t g_chrome_begin = 0;
+uintptr_t g_chrome_end = 0;
 
 // One snapshot per tab container (one per browser window); the oldest is recycled.
 constexpr size_t kMaxSnapshots = 8;
@@ -441,6 +447,7 @@ void RewriteLayout(void* layout_ptr, const void* layout_object) {
       y += static_cast<int32_t>(static_cast<float>(gap_before(index + 1)) * reveal + 0.5f);
     }
   }
+  g_last_animating = animating;
   if (animating) {
     RequestAnimationFrame();
   }
@@ -472,6 +479,156 @@ void RewriteLayoutGuarded(void* layout_ptr, const void* layout_object) {
   }
 }
 
+// ---------------------------------------------------------------------------------------
+// Layout storm detector
+// ---------------------------------------------------------------------------------------
+// While anything animates, Chrome evaluates this layout a few dozen times per frame: bursts of
+// up to ~2000 calls/s that end within a second or two. A rate that stays high for several
+// seconds is a relayout loop instead (seen in the field: hundreds of calls per second until the
+// browser was killed). Each storm is logged with the distinct stacks that keep calling in, as
+// chrome.dll RVAs to symbolise offline against the PDB, and kept for debug.report.
+// UI thread only, except for the report copy behind g_storm_mutex.
+constexpr LONG kStormCallsPerSecond = 300;
+// Opening a tab animates for up to ~2 s; the storms seen in the field lasted 10 s and more.
+constexpr int kStormSeconds = 5;
+constexpr size_t kStormStacks = 4;    // distinct caller stacks kept per storm
+constexpr int kStormStackProbes = 64;  // calls sampled for them
+
+struct StormWatch {
+  ULONGLONG second_start = 0;
+  LONG second_calls = 0;
+  int hot_seconds = 0;
+  bool active = false;
+  ULONGLONG last_seen_at = 0;  // any layout call
+  ULONGLONG started_at = 0;
+  ULONGLONG last_call_at = 0;  // last call of the current storm
+  LONG calls = 0;
+  LONG peak = 0;  // calls per second
+  uint64_t reorders_at_start = 0;
+  int probes_left = 0;
+  std::vector<std::string> stacks;
+};
+StormWatch g_storm;
+volatile LONG g_storm_count = 0;
+std::mutex g_storm_mutex;
+// Report copy of the last storm and the tick of its latest call; guarded by g_storm_mutex.
+nlohmann::json g_last_storm;
+ULONGLONG g_last_storm_call_at = 0;
+
+std::string CallerStack() {
+  void* frames[32] = {};
+  const USHORT count = RtlCaptureStackBackTrace(1, 32, frames, nullptr);
+  std::string text;
+  char buffer[16];
+  int kept = 0;
+  for (USHORT i = 0; i < count && kept < 16; ++i) {
+    const auto address = reinterpret_cast<uintptr_t>(frames[i]);
+    if (address < g_chrome_begin || address >= g_chrome_end) {
+      continue;
+    }
+    _snprintf_s(buffer, sizeof(buffer), _TRUNCATE, kept ? " %x" : "%x",
+                static_cast<unsigned>(address - g_chrome_begin));
+    text += buffer;
+    ++kept;
+  }
+  return text;
+}
+
+void PublishStorm() {
+  const nlohmann::json storm = {
+      {"ongoing", g_storm.active},
+      {"durationMs", g_storm.last_call_at - g_storm.started_at},
+      {"calls", g_storm.calls},
+      {"peakPerSecond", g_storm.peak},
+      {"reorders", GlobalState().Counts().reorders - g_storm.reorders_at_start},
+      {"stacks", g_storm.stacks}};
+  std::lock_guard<std::mutex> lock(g_storm_mutex);
+  g_last_storm = storm;
+  g_last_storm_call_at = g_storm.last_call_at;
+}
+
+void NoteLayoutCall() {
+  const ULONGLONG now = GetTickCount64();
+  StormWatch& watch = g_storm;
+  // A quiet second ends whatever was going on; the window restarts with this call.
+  if (watch.second_start && now - watch.last_seen_at > 1000) {
+    if (watch.active) {
+      watch.active = false;
+      ARB_WARN("layout storm ended after %llu ms (%ld calls, peak %ld/s)",
+               watch.last_call_at - watch.started_at, watch.calls, watch.peak);
+      PublishStorm();
+    }
+    watch.hot_seconds = 0;
+    watch.second_start = now;
+    watch.second_calls = 0;
+  }
+  watch.last_seen_at = now;
+  if (watch.active) {
+    ++watch.calls;
+    watch.last_call_at = now;
+  }
+  if (watch.probes_left > 0) {
+    --watch.probes_left;
+    std::string stack = CallerStack();
+    if (!stack.empty() && watch.stacks.size() < kStormStacks &&
+        std::find(watch.stacks.begin(), watch.stacks.end(), stack) == watch.stacks.end()) {
+      ARB_WARN("layout storm caller (chrome.dll RVAs): %s", stack.c_str());
+      watch.stacks.push_back(std::move(stack));
+      PublishStorm();
+    }
+  }
+  if (!watch.second_start) {
+    watch.second_start = now;
+  }
+  ++watch.second_calls;
+  const ULONGLONG elapsed = now - watch.second_start;
+  if (elapsed < 1000) {
+    return;
+  }
+  const LONG window_calls = watch.second_calls;
+  const auto rate = static_cast<LONG>(window_calls * 1000LL / static_cast<LONGLONG>(elapsed));
+  const ULONGLONG window_start = watch.second_start;
+  watch.second_start = now;
+  watch.second_calls = 0;
+  if (rate < kStormCallsPerSecond) {
+    watch.hot_seconds = 0;
+    if (watch.active) {
+      watch.active = false;
+      ARB_WARN("layout storm ended after %llu ms (%ld calls, peak %ld/s)",
+               watch.last_call_at - watch.started_at, watch.calls, watch.peak);
+      PublishStorm();
+    }
+    return;
+  }
+  watch.peak = watch.hot_seconds == 0 || rate > watch.peak ? rate : watch.peak;
+  if (watch.active) {
+    PublishStorm();
+    return;
+  }
+  // The storm is dated from its first hot second, not from when it was recognised.
+  if (watch.hot_seconds++ == 0) {
+    watch.started_at = window_start;
+    watch.calls = 0;
+    watch.reorders_at_start = GlobalState().Counts().reorders;
+  }
+  watch.calls += window_calls;
+  if (watch.hot_seconds < kStormSeconds) {
+    return;
+  }
+  watch.active = true;
+  watch.last_call_at = now;
+  watch.probes_left = kStormStackProbes;
+  watch.stacks.clear();
+  InterlockedIncrement(&g_storm_count);
+  ARB_WARN("layout storm: %ld calls/s for %d s (own motion %s, held managers %zu, dragging %s, "
+           "reorder-only snapshots meanwhile %llu)",
+           rate, kStormSeconds, g_last_animating ? "running" : "idle", g_held.size(),
+           DragInProgress() ? "yes" : "no",
+           static_cast<unsigned long long>(GlobalState().Counts().reorders -
+                                           watch.reorders_at_start));
+  PublishStorm();
+}
+
 void* HookCalculateLayout(const void* self, void* out_layout, const void* size_bounds) {
   void* result = reinterpret_cast<CalcLayoutFn>(g_feature.original)(self, out_layout, size_bounds);
   // A C++ exception escaping into Chrome's layout code terminates the browser, so the whole
@@ -489,7 +646,9 @@ void* HookCalculateLayout(const void* self, void* out_layout, const void* size_b
   if (result) {
     RewriteLayoutGuarded(result, self);
   }
-  if (call <= 3 || call % 200 == 0) {
+  NoteLayoutCall();
+  // The storm report covers storms; sampling them here would only push it out of the log tail.
+  if ((call <= 3 || call % 200 == 0) && !g_storm.active) {
     ARB_DEBUG("layout hook call %ld (layout=%p result=%p)", call, self, result);
   }
   } catch (const std::exception& exception) {
@@ -546,6 +705,10 @@ bool InstallLayoutFeature(HMODULE chrome_dll, const Offsets& offsets, LayoutFeat
     return false;
   }
   auto* base = reinterpret_cast<uint8_t*>(chrome_dll);
+  const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+  const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+  g_chrome_begin = reinterpret_cast<uintptr_t>(base);
+  g_chrome_end = g_chrome_begin + nt->OptionalHeader.SizeOfImage;
   if (!PrologueMatches(base, found->second)) {
     ARB_WARN("prologue mismatch for %s; layout feature disabled", kName);
     return false;
@@ -623,6 +786,23 @@ long LayoutEmptySkips() { return g_empty_skips; }
 long LayoutMaxChildren() { return g_max_children; }
 
 long LayoutFaults() { return g_faults; }
+
+long LayoutStormCount() { return g_storm_count; }
+
+std::string DescribeLastLayoutStorm() {
+  std::lock_guard<std::mutex> lock(g_storm_mutex);
+  if (g_last_storm.is_null()) {
+    return "null";
+  }
+  nlohmann::json storm = g_last_storm;
+  const ULONGLONG idle = GetTickCount64() - g_last_storm_call_at;
+  // The end of a storm is only noticed on the next layout pass; a quiet strip has none.
+  if (storm["ongoing"].get<bool>() && idle > 2000) {
+    storm["ongoing"] = false;
+  }
+  storm["secondsAgo"] = idle / 1000;
+  return storm.dump();
+}
 
 long LayoutCallCount() { return g_calls; }
 long LayoutRewriteCount() { return g_rewrites; }

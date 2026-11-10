@@ -65,5 +65,9 @@ long LayoutHorizontalSkips();
 long LayoutEmptySkips();
 long LayoutMaxChildren();
 long LayoutFaults();
+// Relayout loops: layout passes kept above the storm rate for several seconds.
+long LayoutStormCount();
+// The last storm as JSON (duration, rates, caller stacks as chrome.dll RVAs), or "null".
+std::string DescribeLastLayoutStorm();
 
 }  // namespace arbortab
