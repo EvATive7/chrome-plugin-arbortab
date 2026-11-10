@@ -46,3 +46,54 @@ jobs:
         run: |
           $assets = Get-ChildItem dist -File | ForEach-Object FullName
           gh release create '${{ github.ref_name }}' $assets --latest --generate-notes --title "ArborTab ${{ github.ref_name }}"
+
+  chrome-web-store:
+    name: Submit to Chrome Web Store
+    needs: release
+    runs-on: ubuntu-latest
+    environment: chrome-web-store
+    concurrency:
+      group: chrome-web-store
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the store package built by the release job
+        uses: actions/download-artifact@v4
+        with:
+          name: arbortab-cws-${{ github.ref_name }}
+          path: cws-package
+
+      - name: Authenticate to Google Cloud
+        id: google-auth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.CWS_WIF_PROVIDER }}
+          service_account: ${{ vars.CWS_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/chromewebstore
+          access_token_lifetime: 1800s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Upload and submit for review
+        env:
+          CWS_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_ITEM_ID: ${{ vars.CWS_ITEM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package=(cws-package/arbortab-extension-store-*.zip)
+          if [[ ${#package[@]} -ne 1 || ! -f "${package[0]}" ]]; then
+            echo "Expected exactly one Chrome Web Store package" >&2
+            exit 1
+          fi
+          python -I tools/ci/publish_cws.py \
+            --package "${package[0]}" \
+            --publisher-id "$CWS_PUBLISHER_ID" \
+            --item-id "$CWS_ITEM_ID"
