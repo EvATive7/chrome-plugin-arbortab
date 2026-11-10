@@ -111,11 +111,16 @@ std::string DebugReportJson(const LinkClient& client) {
                      {"logLevel", ReadConfigString("logLevel", "info")},
                      {"disableDownload", ReadConfigInt("disableDownload", 0)},
                      {"safeMode", ReadConfigInt("safeMode", 1)}};
+  const StateStore::Counters counts = GlobalState().Counts();
   reply["stats"] = {{"clients", static_cast<int>(GlobalState().ClientCount())},
                     {"layoutCalls", LayoutCallCount()},
                     {"layoutRewrites", LayoutRewriteCount()},
                     {"tabIdFailures", LayoutTabIdFailures()},
-                    {"uiRefreshes", UiThreadRefreshCount()}};
+                    {"uiRefreshes", UiThreadRefreshCount()},
+                    {"layoutStorms", LayoutStormCount()},
+                    {"stateSnapshots", counts.snapshots},
+                    {"stateReorders", counts.reorders}};
+  reply["lastLayoutStorm"] = nlohmann::json::parse(DescribeLastLayoutStorm(), nullptr, false);
   nlohmann::json log = nlohmann::json::array();
   for (const std::string& line : LogTail(120)) {
     log.push_back(line);

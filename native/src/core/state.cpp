@@ -38,6 +38,14 @@ bool StateStore::ReplaceAll(int client_id, const std::vector<int>& tabs,
     next.insert(tab_id);
   }
   previous.assign(next.begin(), next.end());
+  ++snapshots_;
+  std::vector<int>& order = client_order_[client_id];
+  if (order != tabs) {
+    if (!changed) {
+      ++reorders_;
+    }
+    order = tabs;
+  }
   if (changed) {
     ++version_;
   }
@@ -54,6 +62,7 @@ void StateStore::RemoveClient(int client_id) {
     tabs_.erase(tab_id);
   }
   client_tabs_.erase(owned);
+  client_order_.erase(client_id);
   ++version_;
 }
 
@@ -81,6 +90,11 @@ DisplayConfig StateStore::Config() const {
 uint64_t StateStore::Version() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return version_;
+}
+
+StateStore::Counters StateStore::Counts() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return Counters{snapshots_, reorders_};
 }
 
 size_t StateStore::ClientCount() const {

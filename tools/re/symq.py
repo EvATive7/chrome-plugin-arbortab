@@ -1,4 +1,6 @@
-"""Query a PDB via dbghelp. usage: symq.py <pdb> sym <mask>... | type <TypeName>..."""
+"""Query a PDB via dbghelp. usage: symq.py <pdb> sym <mask>... | type <TypeName>... | addr <rva>...
+
+`addr` symbolises chrome.dll RVAs, e.g. the caller stacks of a layout storm in debug.report."""
 import ctypes as C, ctypes.wintypes as W, sys
 
 dbg = C.WinDLL(r"C:\Windows\System32\dbghelp.dll")
@@ -69,6 +71,20 @@ def typ(name):
             if off is not None:
                 print(f"  +{off:#06x} {nm}")
 
+class SYMBOL_INFOW_NAMED(C.Structure):
+    _fields_ = SYMBOL_INFOW._fields_[:-1] + [("Name", W.WCHAR * 2000)]
+
+def addr(text):
+    rva = int(text, 16)
+    info = SYMBOL_INFOW_NAMED()
+    info.SizeOfStruct = C.sizeof(SYMBOL_INFOW)
+    info.MaxNameLen = 2000
+    disp = C.c_uint64()
+    if dbg.SymFromAddrW(hp, C.c_uint64(BASE + rva), C.byref(disp), C.byref(info)):
+        print(f"{rva:#010x} {info.Name}+{disp.value:#x}")
+    else:
+        print(f"{rva:#010x} ?")
+
 mode = sys.argv[2]
 for a in sys.argv[3:]:
-    (sym if mode == "sym" else typ)(a)
+    {"sym": sym, "type": typ, "addr": addr}[mode](a)
