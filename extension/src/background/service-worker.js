@@ -150,8 +150,13 @@ function isNewTabPage(tab) {
   return NEW_TAB_URLS.some((prefix) => url.startsWith(prefix));
 }
 
+/**
+ * Pinned, grouped and split tabs stay outside the tree: Chrome keeps each of those blocks
+ * together, so they never get children or a parent, and the extension never moves them.
+ */
 function isTreeTab(tab) {
-  return Boolean(tab) && !tab.pinned && (tab.groupId === undefined || tab.groupId === -1);
+  return Boolean(tab) && !tab.pinned && (tab.groupId ?? -1) === -1
+    && (tab.splitViewId ?? -1) === -1;
 }
 
 function isExtensionRootTab(tab) {
@@ -167,9 +172,10 @@ async function syncWindow(windowId) {
   const liveIds = tabs.map((tab) => tab.id);
   tree.reconcile(state, liveIds);
   for (const tab of tabs) {
-    if (!isTreeTab(tab) && tree.parentOf(state, tab.id) != null) {
-      // Pinned tabs and grouped tabs always live at depth 0 with no parent.
-      tree.attachAsLastChild(state, tab.id, null);
+    if (!isTreeTab(tab)
+      && (tree.parentOf(state, tab.id) != null || tree.childIdsOf(state, tab.id).length)) {
+      // Pinned, grouped and split tabs always live at depth 0 with no parent and no children.
+      tree.promoteOut(state, tab.id);
     }
   }
   tree.adoptOrder(state, liveIds);
@@ -257,27 +263,126 @@ async function onCreated(createdTab) {
   }
   // A new root may have been inserted in the middle of a subtree (Chrome places tabs next to
   // their opener): the tree order wins either way.
-  await applyOrder(tab.windowId, state);
+  await applyOrder(tab.windowId);
   bumpState();
   await saveSession();
 }
 
-async function applyOrder(windowId, state) {
-  const tabIds = tree.preorder(state);
-  for (let index = 0; index < tabIds.length; index += 1) {
-    const tabId = tabIds[index];
+// ---------------------------------------------------------------------------------------
+// Strip order
+// ---------------------------------------------------------------------------------------
+
+// More moves than this within the window means something keeps undoing them (Chrome refusing a
+// position, or another extension reordering tabs): order enforcement then pauses for a while
+// instead of moving tabs back and forth forever.
+const ORDER_GUARD_WINDOW_MS = 10000;
+const ORDER_GUARD_MAX_MOVES = 150;
+const ORDER_GUARD_PAUSE_MS = 30000;
+const ORDER_REFUSALS_RECORDED = 10;
+
+/** Diagnostics for the debug export. */
+const orderStats = { requests: 0, moves: 0, refused: 0, movedEvents: 0, pauses: 0 };
+/** @type {Map<number, {running: Promise<void> | null, again: boolean, moves: number[], pausedUntil: number}>} */
+const orderRuns = new Map();
+
+/**
+ * Moves the window's tree tabs into the tree's pre-order. Runs one pass at a time per window;
+ * requests during a pass make it run once more, so every caller sees the latest tree applied.
+ */
+function applyOrder(windowId) {
+  orderStats.requests += 1;
+  let run = orderRuns.get(windowId);
+  if (!run) {
+    run = { running: null, again: false, moves: [], pausedUntil: 0 };
+    orderRuns.set(windowId, run);
+  }
+  if (run.running) {
+    run.again = true;
+    return run.running;
+  }
+  run.running = (async () => {
     try {
-      const current = await chrome.tabs.get(tabId);
-      if (current.windowId !== windowId) {
+      do {
+        run.again = false;
+        await enforceOrder(windowId, run);
+      } while (run.again);
+    } finally {
+      run.running = null;
+    }
+  })();
+  return run.running;
+}
+
+async function enforceOrder(windowId, run) {
+  const state = windows.get(windowId);
+  if (!state || Date.now() < run.pausedUntil) {
+    return;
+  }
+  // Each step re-reads the strip and fixes the first tree tab that does not directly follow its
+  // pre-order predecessor. Only tree tabs move, and only next to a neighbour: pinned tabs,
+  // groups and split views are never moved, nor split apart by a tab moved into them.
+  for (let step = 0; step < 4 * state.nodes.size + 16; step += 1) {
+    const tabs = await chrome.tabs.query({ windowId });
+    const byId = new Map(tabs.map((tab) => [tab.id, tab]));
+    const order = tree.preorder(state).filter((tabId) => byId.has(tabId));
+    let target = null;
+    for (let index = 0; index < order.length && !target; index += 1) {
+      const tab = byId.get(order[index]);
+      if (!isTreeTab(tab)) {
         continue;
       }
-      if (current.index !== index) {
-        await chrome.tabs.move(tabId, { index });
+      const previous = index > 0 ? byId.get(order[index - 1]) : null;
+      // tabs.move takes the final index: moving right past the predecessor shifts it left.
+      const wanted = !previous ? 0 : (tab.index < previous.index ? previous.index : previous.index + 1);
+      if (tab.index !== wanted) {
+        target = { tab, wanted };
       }
-    } catch {
-      // The tab disappeared mid-flight; the next reconcile fixes the order.
+    }
+    if (!target) {
+      return;
+    }
+    if (!noteMove(windowId, run, tabs)) {
+      return;
+    }
+    orderStats.moves += 1;
+    const moved = await chrome.tabs.move(target.tab.id, { index: target.wanted }).catch(() => null);
+    const landed = Array.isArray(moved) ? moved[0] : moved;
+    if (!landed || landed.index !== target.wanted) {
+      // Chrome put it elsewhere (or the tab is gone): retrying would only fight Chrome.
+      orderStats.refused += 1;
+      if (orderStats.refused <= ORDER_REFUSALS_RECORDED) {
+        record('orderMoveRefused', {
+          windowId,
+          wanted: target.wanted,
+          landed: landed ? landed.index : null,
+        });
+      }
+      return;
     }
   }
+}
+
+function noteMove(windowId, run, tabs) {
+  const now = Date.now();
+  run.moves = run.moves.filter((at) => now - at < ORDER_GUARD_WINDOW_MS);
+  run.moves.push(now);
+  if (run.moves.length <= ORDER_GUARD_MAX_MOVES) {
+    return true;
+  }
+  run.moves = [];
+  run.pausedUntil = now + ORDER_GUARD_PAUSE_MS;
+  orderStats.pauses += 1;
+  record('orderLoopPaused', {
+    windowId,
+    moves: ORDER_GUARD_MAX_MOVES,
+    withinMs: ORDER_GUARD_WINDOW_MS,
+    pauseMs: ORDER_GUARD_PAUSE_MS,
+    tabs: tabs.length,
+    pinned: tabs.filter((tab) => tab.pinned).length,
+    grouped: tabs.filter((tab) => (tab.groupId ?? -1) !== -1).length,
+    split: tabs.filter((tab) => (tab.splitViewId ?? -1) !== -1).length,
+  });
+  return false;
 }
 
 async function onRemoved(tabId, removeInfo) {
@@ -329,6 +434,7 @@ function confirmClose(tabId, count) {
 
 async function onMoved(tabId, moveInfo) {
   await ensureInit();
+  orderStats.movedEvents += 1;
   if (dragActive) {
     return; // the drag handlers decide the parent when the drop finishes
   }
@@ -345,7 +451,7 @@ async function onMoved(tabId, moveInfo) {
     bumpState();
     await saveSession();
   }
-  await applyOrder(moveInfo.windowId, state);
+  await applyOrder(moveInfo.windowId);
 }
 
 async function onActivated(activeInfo) {
@@ -369,7 +475,7 @@ async function onAttached(tabId, attachInfo) {
   if (source) {
     await syncWindow(attachInfo.fromWindowId);
   }
-  await applyOrder(attachInfo.newWindowId, target);
+  await applyOrder(attachInfo.newWindowId);
   bumpState();
   await saveSession();
 }
@@ -389,26 +495,14 @@ async function onUpdated(tabId, changeInfo, tab) {
     // The native count badge follows the rendered title, so title changes need a fresh snapshot.
     bumpState();
   }
-  if (!('pinned' in changeInfo) && !('groupId' in changeInfo)) {
+  if (!('pinned' in changeInfo) && !('groupId' in changeInfo) && !('splitViewId' in changeInfo)) {
     return;
   }
   const state = stateFor(tab.windowId);
-  const node = state.nodes.get(tabId);
-  if (!node) {
-    return;
-  }
-  if (!isTreeTab(tab)) {
-    // Leaving the tree scope (pinned / grouped) promotes the children one level.
-    const parent = tree.parentOf(state, tabId);
-    const children = [...node.children];
-    const list = tree.siblingsOf(state, parent);
-    const index = list.indexOf(tabId);
-    node.children = [];
-    node.collapsed = false;
-    tree.detach(state, tabId);
-    const target = tree.siblingsOf(state, parent);
-    target.splice(index < 0 ? target.length : index + 1, 0, ...children);
-    tree.attachAsLastChild(state, tabId, null);
+  if (!isTreeTab(tab)
+    && (tree.parentOf(state, tabId) != null || tree.childIdsOf(state, tabId).length)) {
+    // Leaving the tree scope (pinned / grouped / split) promotes the children one level.
+    tree.promoteOut(state, tabId);
     const tabs = await chrome.tabs.query({ windowId: tab.windowId });
     tabs.sort((a, b) => a.index - b.index);
     tree.adoptOrder(state, tabs.map((candidate) => candidate.id));
@@ -502,7 +596,7 @@ async function onDragEnd() {
   // The tree is the only authority on order: whatever Chrome did to the strip during the drag
   // is undone here (moves outside a drag keep going through onMoved/adoptOrder).
   if (windowId != null && windows.has(windowId)) {
-    await applyOrder(windowId, stateFor(windowId));
+    await applyOrder(windowId);
   }
   bumpState();
   await saveSession();
@@ -532,7 +626,7 @@ async function dropOnto(targetTabId, zone = 'nest', draggedTabId = null) {
     return;
   }
   if (!isTreeTab(dragged) || !isTreeTab(target)) {
-    return; // pinned and grouped tabs stay outside the tree
+    return; // pinned, grouped and split tabs stay outside the tree
   }
   const state = stateFor(target.windowId);
   if (tree.subtreeIds(state, dragged.id).includes(targetTabId)) {
@@ -549,7 +643,7 @@ async function dropOnto(targetTabId, zone = 'nest', draggedTabId = null) {
     // Drop onto the tab: become the target's last child.
     tree.attachAsLastChild(state, dragged.id, targetTabId);
   }
-  await applyOrder(target.windowId, state);
+  await applyOrder(target.windowId);
   bumpState();
   await saveSession();
 }
@@ -589,7 +683,7 @@ async function commandOutdent() {
   }
   // Promote one level: become the parent's next sibling.
   tree.insertSibling(state, tab.id, parent, 'after');
-  await applyOrder(tab.windowId, state);
+  await applyOrder(tab.windowId);
   bumpState();
   await saveSession();
 }
@@ -607,7 +701,7 @@ async function commandIndent() {
     return;
   }
   tree.attachAsLastChild(state, tab.id, previous);
-  await applyOrder(tab.windowId, state);
+  await applyOrder(tab.windowId);
   bumpState();
   await saveSession();
 }
@@ -793,6 +887,10 @@ async function debugReport() {
     native: { ...nativeStatus(), report: nativeReport },
     config,
     tree: treeSummary(serializeWindows()),
+    order: {
+      ...orderStats,
+      pausedWindows: [...orderRuns.values()].filter((run) => Date.now() < run.pausedUntil).length,
+    },
     events: recentEvents(),
   };
 }
@@ -832,7 +930,8 @@ chrome.runtime.onStartup.addListener(() => void ensureInit());
 // Exposed for the extension's own options page and for sandbox tests.
 globalThis.arbortab = {
   getState: () => ({ version: stateVersion, config, windows: serializeWindows(), connected: link.isConnected,
-    features: link.features, native: link.native, updateNeeded: link.updateNeeded }),
+    features: link.features, native: link.native, updateNeeded: link.updateNeeded,
+    order: { ...orderStats } }),
   // Sandbox test hook: exercises the same path as a native dropOnto event.
   __testDrop: (targetTabId, zone, draggedTabId) => dropOnto(targetTabId, zone, draggedTabId),
   __testToggle: (tabId) => toggleCollapsed(tabId),

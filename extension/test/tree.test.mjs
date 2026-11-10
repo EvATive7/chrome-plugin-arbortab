@@ -88,6 +88,39 @@ test('reconcile drops dead tabs and adopts unknown ones', () => {
   assert.deepEqual(tree.preorder(state), [1, 3, 4]);
 });
 
+test('unknown tabs become roots at their strip position, not at the end', () => {
+  // 5 was opened next to 2 (e.g. inside a tab group or beside a split view).
+  const state = build([1, 2, 3, 4], { 4: 3 });
+  tree.reconcile(state, [1, 2, 5, 3, 4]);
+  assert.equal(tree.parentOf(state, 5), null);
+  assert.deepEqual(tree.preorder(state), [1, 2, 5, 3, 4]);
+});
+
+test('unknown tabs inside a subtree land after that subtree', () => {
+  const state = build([1, 2, 3], { 2: 1, 3: 1 });
+  tree.reconcile(state, [1, 2, 9, 3]);
+  assert.equal(tree.parentOf(state, 9), null);
+  assert.deepEqual(tree.preorder(state), [1, 2, 3, 9]);
+});
+
+test('promoteOut lifts the children into the slot and makes the tab a root', () => {
+  const state = build([1, 2, 3, 4, 5], { 2: 1, 3: 2, 4: 2, 5: 1 });
+  tree.promoteOut(state, 2);
+  tree.adoptOrder(state, [1, 2, 3, 4, 5]);
+  assert.equal(tree.parentOf(state, 2), null);
+  assert.deepEqual(tree.childIdsOf(state, 2), []);
+  assert.deepEqual(tree.childIdsOf(state, 1), [3, 4, 5]);
+  assert.deepEqual(tree.preorder(state), [1, 3, 4, 5, 2]);
+});
+
+test('promoteOut on a leaf only detaches it', () => {
+  const state = build([1, 2, 3], { 2: 1 });
+  tree.promoteOut(state, 2);
+  tree.adoptOrder(state, [1, 2, 3]);
+  assert.equal(tree.parentOf(state, 2), null);
+  assert.deepEqual(tree.preorder(state), [1, 2, 3]);
+});
+
 test('detached subtrees can move to another window', () => {
   const source = build([1, 2, 3], { 2: 1, 3: 2 });
   const target = tree.createWindowState([9]);
