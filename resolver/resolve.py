@@ -6,10 +6,14 @@ Usage:
 
 The resolver deliberately fails closed: every requested symbol, field, type size,
 prologue and vtable slot must resolve unambiguously before JSON is written.
+
+Progress goes to stdout as it happens (one line per resolved entry, timestamped from the
+start); on GitHub Actions each stage is folded into a log group.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes as C
 import ctypes.wintypes as W
 import datetime as dt
@@ -18,7 +22,9 @@ import os
 from pathlib import Path
 import struct
 import sys
-from typing import Any
+import threading
+import time
+from typing import Any, Iterator
 
 import pefile
 import yaml
@@ -55,6 +61,61 @@ class SYMBOL_INFOW(C.Structure):
 
 
 CALLBACK = C.WINFUNCTYPE(W.BOOL, C.POINTER(SYMBOL_INFOW), W.ULONG, C.c_void_p)
+
+
+class Progress:
+    """Timestamped progress lines; remembers where it is so a failure can say so."""
+
+    def __init__(self) -> None:
+        self.start = time.monotonic()
+        self.grouped = os.environ.get("GITHUB_ACTIONS") == "true"
+        self.stage = "startup"
+        self.item = ""
+        self.passed = 0
+
+    def log(self, message: str) -> None:
+        print(f"[{time.monotonic() - self.start:6.1f}s] {message}", flush=True)
+
+    def entry(self, name: str, detail: str) -> None:
+        """One resolved and validated entry."""
+        self.passed += 1
+        self.log(f"  {name:<58} {detail}")
+
+    @contextlib.contextmanager
+    def section(self, title: str, count: int | None = None) -> Iterator[None]:
+        self.stage, self.item = title, ""
+        heading = f"{title} ({count})" if count is not None else title
+        if self.grouped:
+            print(f"::group::{heading}", flush=True)
+        self.log(heading)
+        began = time.monotonic()
+        try:
+            yield
+        finally:
+            self.log(f"{title}: {time.monotonic() - began:.1f}s")
+            if self.grouped:
+                print("::endgroup::", flush=True)
+
+    @contextlib.contextmanager
+    def waiting(self, what: str, every: float = 30.0) -> Iterator[None]:
+        """For single blocking calls (dbghelp releases the GIL): show that it is still alive."""
+        stop = threading.Event()
+        began = time.monotonic()
+
+        def beat() -> None:
+            while not stop.wait(every):
+                self.log(f"  still {what} ({time.monotonic() - began:.0f}s)")
+
+        thread = threading.Thread(target=beat, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join()
+
+
+PROGRESS = Progress()
 
 
 def symbol_name(pointer: C.POINTER(SYMBOL_INFOW)) -> str:
@@ -312,99 +373,153 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
+    progress = PROGRESS
     spec = yaml.safe_load(args.spec.read_text(encoding="utf-8"))
-    pe = pefile.PE(str(args.dll), fast_load=False)
-    key, pdb_name = pdb_key_and_name(pe)
-    version = chrome_version(pe)
-    symbols = DbgHelp(args.pdb)
+    with progress.section("chrome.dll"):
+        pe = pefile.PE(str(args.dll), fast_load=False)
+        key, pdb_name = pdb_key_and_name(pe)
+        version = chrome_version(pe)
+        progress.log(f"  Chrome {version}, PDB {pdb_name} key {key}")
+
+    with progress.section("loading PDB"):
+        size = args.pdb.stat().st_size
+        # dbghelp reads lazily: this is quick, the first lookups below pay for the size.
+        progress.log(f"  {args.pdb} ({size / 2**30:.1f} GiB)")
+        with progress.waiting("loading the PDB"):
+            symbols = DbgHelp(args.pdb)
 
     functions: dict[str, dict[str, Any]] = {}
     resolved: dict[str, int] = {}
     hooks: dict[str, bool] = {}
     aliases: dict[int, list[str]] = {}
-    for output_name, request in spec["functions"].items():
-        is_private = "private" in request
-        query = request.get("private") or request["symbol"]
-        found = symbols.unique_symbol(query, private=is_private)
-        rva = found["rva"]
-        resolved[output_name] = rva
-        hooks[output_name] = bool(request.get("hook", True))
-        functions[output_name] = {
-            "rva": f"0x{rva:08x}",
-            "prologue": read_rva(pe, rva, 16).hex(" "),
-        }
-        aliases.setdefault(rva, []).append(output_name)
+    with progress.section("functions", len(spec["functions"])):
+        for output_name, request in spec["functions"].items():
+            progress.item = output_name
+            is_private = "private" in request
+            query = request.get("private") or request["symbol"]
+            with progress.waiting(f"looking up {output_name}"):
+                found = symbols.unique_symbol(query, private=is_private)
+            rva = found["rva"]
+            resolved[output_name] = rva
+            hooks[output_name] = bool(request.get("hook", True))
+            functions[output_name] = {
+                "rva": f"0x{rva:08x}",
+                "prologue": read_rva(pe, rva, 16).hex(" "),
+            }
+            aliases.setdefault(rva, []).append(output_name)
+            kind = ("hook" if hooks[output_name] else "call") + (", private" if is_private else "")
+            progress.entry(output_name, f"0x{rva:08x}  {kind}")
 
     # Hooking a function that shares its address with other code would intercept that
     # code too, so every *hooked* function must be a unique entry point. Functions we
     # only call (vtable lookups, throw-away helpers) may legally fold onto other code.
     collisions: dict[str, str] = {}
     hook_targets: dict[str, dict[str, str]] = {}
-    for output_name, rva in resolved.items():
-        if not hooks.get(output_name, True):
-            continue
-        others = symbols.symbols_at(rva) if len(aliases[rva]) == 1 else []
-        if len(aliases[rva]) > 1:
-            collisions[output_name] = "requested more than once"
-            continue
-        others = [name for name in others if name != output_name]
-        if others:
-            collisions[output_name] = ", ".join(others[:4])
-            continue
-        hook_targets[output_name] = {"rva": functions[output_name]["rva"]}
-    if collisions:
-        details = "; ".join(f"{name} <- {owner}" for name, owner in collisions.items())
-        raise ValueError(f"hooked functions share their address with other code: {details}")
+    with progress.section("hook targets (identical code folding)", sum(hooks.values())):
+        progress.item = "enumerating public symbols"
+        with progress.waiting("enumerating public symbols"):
+            symbols.public_symbol_map()
+        for output_name, rva in resolved.items():
+            if not hooks.get(output_name, True):
+                continue
+            progress.item = output_name
+            others = symbols.symbols_at(rva) if len(aliases[rva]) == 1 else []
+            if len(aliases[rva]) > 1:
+                collisions[output_name] = "requested more than once"
+                progress.log(f"  {output_name:<58} SHARED: requested more than once")
+                continue
+            others = [name for name in others if name != output_name]
+            if others:
+                collisions[output_name] = ", ".join(others[:4])
+                progress.log(f"  {output_name:<58} SHARED with {collisions[output_name]}")
+                continue
+            hook_targets[output_name] = {"rva": functions[output_name]["rva"]}
+            progress.entry(output_name, "unique entry point")
+        if collisions:
+            details = "; ".join(f"{name} <- {owner}" for name, owner in collisions.items())
+            raise ValueError(f"hooked functions share their address with other code: {details}")
 
     type_cache: dict[str, tuple[int, dict[str, int]]] = {}
-    for type_name, expected_size in spec["types"].items():
-        layout = symbols.type_layout(type_name)
-        type_cache[type_name] = layout
-        expected = int(expected_size, 0) if isinstance(expected_size, str) else int(expected_size)
-        if layout[0] != expected:
-            raise ValueError(f"{type_name} size 0x{layout[0]:x}, expected 0x{expected:x}")
+
+    def layout_of(type_name: str, announce: bool = False) -> tuple[int, dict[str, int]]:
+        if type_name not in type_cache:
+            with progress.waiting(f"reading type {type_name}"):
+                type_cache[type_name] = symbols.type_layout(type_name)
+            if announce:  # types only used through their fields are not pinned, but still reported
+                size, members = type_cache[type_name]
+                progress.log(f"  (type {type_name}: size 0x{size:x}, {len(members)} members)")
+        return type_cache[type_name]
+
+    with progress.section("type sizes", len(spec["types"])):
+        for type_name, expected_size in spec["types"].items():
+            progress.item = type_name
+            layout = layout_of(type_name)
+            expected = int(expected_size, 0) if isinstance(expected_size, str) else int(expected_size)
+            if layout[0] != expected:
+                raise ValueError(f"{type_name} size 0x{layout[0]:x}, expected 0x{expected:x}")
+            progress.entry(type_name, f"0x{layout[0]:x}")
 
     fields: dict[str, str] = {}
-    for output_name, (type_name, field_name) in spec["fields"].items():
-        layout = type_cache.setdefault(type_name, symbols.type_layout(type_name))
-        if field_name not in layout[1]:
-            raise ValueError(f"field not found: {type_name}.{field_name}")
-        fields[output_name] = f"0x{layout[1][field_name]:x}"
+    with progress.section("fields", len(spec["fields"])):
+        for output_name, (type_name, field_name) in spec["fields"].items():
+            progress.item = output_name
+            layout = layout_of(type_name, announce=True)
+            if field_name not in layout[1]:
+                raise ValueError(f"field not found: {type_name}.{field_name}")
+            fields[output_name] = f"0x{layout[1][field_name]:x}"
+            progress.entry(output_name, fields[output_name])
 
     vtables: dict[str, list[str]] = {}
     vtable_rvas: dict[str, list[int]] = {}
-    for output_name, undecorated_name in spec["vtables"].items():
-        owner = undecorated_name.split("::`vftable'")[0].split("::")[-1]
-        matches = symbols.symbols(f"*{owner}*vftable*", undecorated=True)
-        rvas = sorted({x["rva"] for x in matches if x["name"] == undecorated_name})
-        if not rvas:
-            raise ValueError(f"vtable not found: {undecorated_name}")
-        vtable_rvas[output_name] = rvas
-        vtables[output_name] = [f"0x{x:08x}" for x in rvas]
+    with progress.section("vtables", len(spec["vtables"])):
+        for output_name, undecorated_name in spec["vtables"].items():
+            progress.item = output_name
+            owner = undecorated_name.split("::`vftable'")[0].split("::")[-1]
+            with progress.waiting(f"looking up {undecorated_name}"):
+                matches = symbols.symbols(f"*{owner}*vftable*", undecorated=True)
+            rvas = sorted({x["rva"] for x in matches if x["name"] == undecorated_name})
+            if not rvas:
+                raise ValueError(f"vtable not found: {undecorated_name}")
+            vtable_rvas[output_name] = rvas
+            vtables[output_name] = [f"0x{x:08x}" for x in rvas]
+            progress.entry(output_name, f"{len(rvas)} table(s): {' '.join(vtables[output_name])}")
 
     slots: dict[str, int] = {}
     image_base = int(pe.OPTIONAL_HEADER.ImageBase)
-    for output_name, request in spec["vtableSlots"].items():
-        target = resolved[request["function"]]
-        found_slots = set()
-        for table_rva in vtable_rvas[request["vtable"]]:
-            values = struct.unpack("<64Q", read_rva(pe, table_rva, 64 * 8))
-            found_slots.update(index for index, value in enumerate(values) if value - image_base == target)
-        if len(found_slots) != 1:
-            raise ValueError(f"vtable slot must be unique: {output_name}: {sorted(found_slots)}")
-        slots[output_name] = found_slots.pop()
+    with progress.section("vtable slots", len(spec["vtableSlots"])):
+        for output_name, request in spec["vtableSlots"].items():
+            progress.item = output_name
+            target = resolved[request["function"]]
+            found_slots = set()
+            for table_rva in vtable_rvas[request["vtable"]]:
+                values = struct.unpack("<64Q", read_rva(pe, table_rva, 64 * 8))
+                found_slots.update(index for index, value in enumerate(values) if value - image_base == target)
+            if len(found_slots) != 1:
+                raise ValueError(f"vtable slot must be unique: {output_name}: {sorted(found_slots)}")
+            slots[output_name] = found_slots.pop()
+            progress.entry(output_name, f"slot {slots[output_name]}")
 
     constants: dict[str, int] = {}
-    for output_name, (enum_name, enumerator) in spec.get("constants", {}).items():
-        constants[output_name] = symbols.enum_value(enum_name, enumerator)
+    with progress.section("constants", len(spec.get("constants", {}))):
+        for output_name, (enum_name, enumerator) in spec.get("constants", {}).items():
+            progress.item = output_name
+            constants[output_name] = symbols.enum_value(enum_name, enumerator)
+            progress.entry(output_name, str(constants[output_name]))
 
     bitfields: dict[str, dict[str, int]] = {}
-    for output_name, (type_name, member) in spec.get("bitfields", {}).items():
-        bitfields[output_name] = symbols.bitfield(type_name, member)
+    with progress.section("bit fields", len(spec.get("bitfields", {}))):
+        for output_name, (type_name, member) in spec.get("bitfields", {}).items():
+            progress.item = output_name
+            bitfields[output_name] = symbols.bitfield(type_name, member)
+            progress.entry(output_name, f"bit {bitfields[output_name]['bit']}, width {bitfields[output_name]['width']}")
 
     bases: dict[str, str] = {}
-    for output_name, (type_name, base_name) in spec.get("bases", {}).items():
-        bases[output_name] = f"0x{symbols.base_offset(type_name, base_name):x}"
+    with progress.section("base classes", len(spec.get("bases", {}))):
+        for output_name, (type_name, base_name) in spec.get("bases", {}).items():
+            progress.item = output_name
+            bases[output_name] = f"0x{symbols.base_offset(type_name, base_name):x}"
+            progress.entry(output_name, bases[output_name])
+    progress.stage, progress.item = "writing output", ""
 
     output = {
         "schema": int(spec["schema"]),
@@ -425,6 +540,7 @@ def main() -> int:
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(output, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    progress.log(f"done in {time.monotonic() - progress.start:.1f}s")
     print(f"resolved Chrome {version} ({key}) -> {args.out}")
     print(f"validated {len(functions)} functions, {len(fields)} fields, {len(type_cache)} types, {len(slots)} vtable slots, "
           f"{len(constants)} constants, {len(bitfields)} bit fields")
@@ -435,5 +551,9 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as error:
-        print(f"resolver failed: {error}", file=sys.stderr)
+        where = PROGRESS.stage + (f" / {PROGRESS.item}" if PROGRESS.item else "")
+        message = f"resolver failed in {where} after {PROGRESS.passed} validated entries: {error}"
+        if PROGRESS.grouped:  # the failing section has already closed its log group
+            print(f"::error title=resolver::{message}", flush=True)
+        print(message, file=sys.stderr, flush=True)
         raise

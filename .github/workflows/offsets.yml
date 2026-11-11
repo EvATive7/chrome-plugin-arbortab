@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       revoke:
-        description: SHA-256 of a published offsets file that must not be used (see AGENTS.md)
+        description: "Leave empty for a normal run. Only to revoke a published offsets file: its SHA-256 (see AGENTS.md)"
         required: false
         default: ""
   schedule:
@@ -126,6 +126,27 @@ jobs:
           # must all be the same key.
           $resolved = (Get-Content -Raw "D:\arbortab\${{ steps.pdb.outputs.key }}.json" | ConvertFrom-Json).pdbKey
           if ($resolved -cne '${{ steps.pdb.outputs.key }}') { throw "PDB key mismatch: pdbinfo.py says ${{ steps.pdb.outputs.key }}, resolve.py says $resolved" }
+
+      # Informational: what the new table changes relative to the newest older one of the same
+      # schema, in the log and on the run's summary page. Never fails the run.
+      - name: Compare with the previous offsets
+        if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $schema = '${{ steps.existing.outputs.schema }}'
+          $new = "D:\arbortab\${{ steps.pdb.outputs.key }}.json"
+          git fetch origin offsets:refs/remotes/origin/offsets 2>$null
+          if ($LASTEXITCODE -ne 0) { "No published offsets to compare with." >> $env:GITHUB_STEP_SUMMARY; exit 0 }
+          git worktree add --detach D:\offsets-previous origin/offsets 2>$null
+          $previous = uv run python -I tools/ci/offsets_index.py previous D:\offsets-previous $schema '${{ steps.chrome.outputs.version }}'
+          if ($LASTEXITCODE -eq 0 -and $previous) {
+            uv run python -I tools/ci/offsets_diff.py $previous $new --summary $env:GITHUB_STEP_SUMMARY
+          } else {
+            "No earlier Chrome version under schema $schema to compare with." >> $env:GITHUB_STEP_SUMMARY
+          }
+          git worktree remove --force D:\offsets-previous
+          $global:LASTEXITCODE = 0
 
       - name: Publish offsets branch
         if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'

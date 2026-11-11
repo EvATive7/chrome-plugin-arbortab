@@ -22,7 +22,7 @@ offsets/            offsets 分支的样例副本（运行时实际从 GitHub �
 packaging/windows/  随原生包发给用户的 install/uninstall 脚本（.cmd 包装 .ps1，兼容 Windows PowerShell 5.1）与桥的宿主清单 com.arbortab.bridge.json
 assets/             logo（logo/make.py 生成）、README 截图
 tools/
-  ci/               CI 用：query-chrome.py、extract-chrome.ps1、offsets_index.py（offsets 分支布局）、offsets_sign.py（签名/撤回）、check_repo.py（一致性检查）、package.py（打包）
+  ci/               CI 用：query-chrome.py、extract-chrome.ps1、offsets_index.py（offsets 分支布局）、offsets_diff.py（新旧偏移量对比）、offsets_sign.py（签名/撤回）、check_repo.py（一致性检查）、package.py（打包）
   dev/              本地开发：build-native.ps1、dev.py/dev.ps1（一键重建+重启沙盒）、sandbox.py、nativecheck.py
   re/               逆向/符号：pdbinfo.py、symq.py、dis.py
   test/             e2e.py（沙盒 Chrome 中的端到端检查）
@@ -59,6 +59,9 @@ uv run --with websocket-client python tools/dev/nativecheck.py --layout
 
 # 生成偏移量
 uv run --with pefile --with pyyaml python resolver/resolve.py --dll <chrome.dll> --pdb <chrome.dll.pdb> --out <key>.json
+
+# 对比两份偏移量（只列字段/大小/常量等布局变化）
+uv run python tools/ci/offsets_diff.py <old.json> <new.json>
 
 # 偏移量签名 / 校验 / 撤回（sign、revoke 需要 OFFSETS_SIGNING_KEY）
 uv run --with cryptography python tools/ci/offsets_sign.py sign|verify <root>
@@ -239,7 +242,7 @@ git sparse-checkout set --no-cone <目录...>
 
 ## 符号与偏移核对经验
 
-- 用 dbghelp：`SymLoadModuleExW` 直接加载 `.pdb`、`SymEnumSymbolsW`、`SymEnumTypesByNameW` + `SymGetTypeInfo`。加载 5.7GB 的 PDB 约 50 秒。
+- 用 dbghelp：`SymLoadModuleExW` 直接加载 `.pdb`、`SymEnumSymbolsW`、`SymEnumTypesByNameW` + `SymGetTypeInfo`。`SymLoadModuleExW` 本身约 1 秒（延迟加载），代价落在查询上：157 实测每个按修饰名查的函数约 2.5 秒、private 约 9 秒，同址检查的全量枚举约 140 秒，整次 resolve 约 5 分钟。resolver 会逐阶段、逐条带时间戳输出，CI 上按阶段折叠；offsets 工作流把与上一版的对比（字段、大小、常量等变化）写进运行摘要页。
 - **重载函数用修饰名（mangled name）精确匹配**（关闭 `SYMOPT_UNDNAME` 后枚举 public 符号），例如 `?FillRect@Canvas@gfx@@QEAAXAEBVRect@2@I@Z`。
 - 部分函数只有私有符号、没有 public 符号（如 `TabView::GetTabInterface`、`DraggedTabsContainer::HandleTabDragInContainer`）。此时用去修饰名匹配，并要求结果唯一（`spec.yaml` 里写 `private:`）。
 - prologue 从 chrome.dll 文件里读（RVA → 文件偏移用 pefile），运行时先比对前若干字节再启用功能。

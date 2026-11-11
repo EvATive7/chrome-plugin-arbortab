@@ -7,6 +7,7 @@ Usage (run inside a checkout of the offsets branch, or of offsets/ in main):
     python offsets_index.py has <root> <schema> <chrome version>     # exit 0 if published
     python offsets_index.py add <root> <schema> <chrome version> <pdb key> <offsets.json>
     python offsets_index.py migrate <root>                            # format 1 -> 2, in place
+    python offsets_index.py previous <root> <schema> <chrome version> # prints the newest older table
 
 `add` also migrates the format-1 layout (index {"schema": 1, "versions": {...}} with files
 directly under win64/), which only ever held schema 1.
@@ -41,6 +42,10 @@ def load(root: Path, migrate: bool) -> dict:
     return migrated
 
 
+def version_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
 def save(root: Path, index: dict) -> None:
     # Signatures cover exact bytes: git must never convert line endings on this branch.
     attributes = root / ".gitattributes"
@@ -64,6 +69,15 @@ def main(argv: list[str]) -> int:
         key = index["schemas"].get(schema, {}).get(version)
         folder = root / "win64" if index.get("legacy") else root / "win64" / f"s{schema}"
         return 0 if key and (folder / f"{key}.json").exists() else 1
+    if command == "previous":
+        # The table to compare a new one against: the newest published version below it.
+        folder = root / "win64" if index.get("legacy") else root / "win64" / f"s{schema}"
+        older = [(v, k) for v, k in index["schemas"].get(schema, {}).items()
+                 if version_key(v) < version_key(version) and (folder / f"{k}.json").exists()]
+        if not older:
+            return 1
+        print(folder / f"{max(older, key=lambda item: version_key(item[0]))[1]}.json")
+        return 0
     if command == "add":
         key, source = argv[5], Path(argv[6])
         offsets = json.loads(source.read_text(encoding="utf-8"))
