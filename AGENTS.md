@@ -242,7 +242,7 @@ git sparse-checkout set --no-cone <目录...>
 
 ## 符号与偏移核对经验
 
-- 用 dbghelp：`SymLoadModuleExW` 直接加载 `.pdb`、`SymEnumSymbolsW`、`SymEnumTypesByNameW` + `SymGetTypeInfo`。`SymLoadModuleExW` 本身约 1 秒（延迟加载），代价落在查询上：157 实测每个按修饰名查的函数约 2.5 秒、private 约 9 秒，同址检查的全量枚举 100–140 秒，整次 resolve 约 4 分钟。全量枚举的大头是 dbghelp 首次读整个符号流（冷约 100 秒、热约 35 秒），与 Python 回调里做什么基本无关；`SymEnumSymbolsForAddrW` 单个地址也要 30 秒以上（首个约 100 秒），不能拿来提速。resolver 会逐阶段、逐条带时间戳输出，CI 上按阶段折叠；offsets 工作流把与上一版的对比（字段、大小、常量等变化）写进运行摘要页。
+- 用 dbghelp：`SymLoadModuleExW` 直接加载 `.pdb`、`SymEnumSymbolsW`、`SymEnumTypesByNameW` + `SymGetTypeInfo`。`SymLoadModuleExW` 本身约 1 秒（延迟加载），代价落在查询上。大头是 dbghelp 第一次遍历整个符号流（冷时 100 秒以上，本机负载高时可到 4 分钟），和 Python 回调里做什么基本无关；`SymEnumSymbolsForAddrW` 每个地址也要 30 秒以上，不能拿来提速。所以 resolver 不再逐个函数查询，而是只遍历两遍：只含 public 符号的一遍（`SYMOPT_PUBLICS_ONLY`，约 10 秒）按修饰名查 `symbol:`，再遍历全部符号一遍（去修饰名），查 `private:` 并做同址检查。注意 `*` 全量遍历**不会**返回与私有函数符号同址的 public 符号，所以修饰名必须在 publics-only 那一遍里查。resolver 会逐阶段、逐条带时间戳输出，CI 上按阶段折叠；offsets 工作流把与上一版的对比（字段、大小、常量等变化）写进运行摘要页。
 - **重载函数用修饰名（mangled name）精确匹配**（关闭 `SYMOPT_UNDNAME` 后枚举 public 符号），例如 `?FillRect@Canvas@gfx@@QEAAXAEBVRect@2@I@Z`。
 - 部分函数只有私有符号、没有 public 符号（如 `TabView::GetTabInterface`、`DraggedTabsContainer::HandleTabDragInContainer`）。此时用去修饰名匹配，并要求结果唯一（`spec.yaml` 里写 `private:`）。
 - prologue 从 chrome.dll 文件里读（RVA → 文件偏移用 pefile），运行时先比对前若干字节再启用功能。

@@ -33,6 +33,7 @@ BASE = 0x180000000
 SYMOPT_UNDNAME = 0x00000002
 SYMOPT_DEFERRED_LOADS = 0x00000004
 SYMOPT_FAIL_CRITICAL_ERRORS = 0x00000200
+SYMOPT_PUBLICS_ONLY = 0x00004000
 
 TI_GET_SYMNAME = 1
 TI_GET_LENGTH = 2
@@ -143,7 +144,6 @@ class DbgHelp:
         self.module = self.dbg.SymLoadModuleExW(self.process, None, str(pdb), None, BASE, 0x20000000, None, 0)
         if not self.module:
             raise OSError(C.get_last_error(), f"SymLoadModuleExW failed: {pdb}")
-        self._public_map: dict[int, list[str]] | None = None
 
     def set_undecorated(self, enabled: bool) -> None:
         self.dbg.SymSetOptions(SYMOPT_FAIL_CRITICAL_ERRORS | (SYMOPT_UNDNAME if enabled else 0))
@@ -168,38 +168,36 @@ class DbgHelp:
         unique = {(x["name"], x["rva"], x["tag"]): x for x in result}
         return list(unique.values())
 
-    def symbols_at(self, rva: int) -> list[str]:
-        """All public symbol names that start at exactly this address."""
-        return self.public_symbol_map().get(rva, [])
+    def scan(self, *, undecorated: bool, publics_only: bool, wanted: set[str], by_address: bool
+             ) -> tuple[dict[str, set[int]], dict[int, set[str]]]:
+        """One pass over every symbol of the module (or every public symbol).
 
-    def public_symbol_map(self) -> dict[int, list[str]]:
-        """Map RVA -> public symbol names, enumerated once and cached."""
-        if self._public_map is None:
-            self.set_undecorated(True)
-            mapping: dict[int, set[str]] = {}
+        Returns the addresses of each name in `wanted` (exact match) and, with `by_address`,
+        every name per address. The cost is dominated by dbghelp walking the symbol stream
+        (100 s or more cold for chrome.dll), not by the matching here, so all lookups of one
+        name mode share one pass instead of scanning once per name.
 
-            def collect(pointer, _size, _context):
-                value = pointer.contents
-                mapping.setdefault(int(value.Address - BASE), set()).add(symbol_name(pointer))
-                return True
+        A full pass does not return the public symbol of an address that also has a private
+        function symbol; a publics-only pass does, like a masked lookup.
+        """
+        self.dbg.SymSetOptions(SYMOPT_FAIL_CRITICAL_ERRORS | (SYMOPT_UNDNAME if undecorated else 0)
+                               | (SYMOPT_PUBLICS_ONLY if publics_only else 0))
+        found: dict[str, set[int]] = {name: set() for name in wanted}
+        names_at: dict[int, set[str]] = {}
 
-            callback = CALLBACK(collect)
-            self.dbg.SymEnumSymbolsW(self.process, self.module, "*", callback, None)
-            self._public_map = {key: sorted(names) for key, names in mapping.items()}
-        return self._public_map
+        def collect(pointer, _size, _context):
+            name = symbol_name(pointer)
+            rva = int(pointer.contents.Address - BASE)
+            if name in found:
+                found[name].add(rva)
+            if by_address:
+                names_at.setdefault(rva, set()).add(name)
+            return True
 
-    def unique_symbol(self, query: str, *, private: bool = False) -> dict[str, Any]:
-        matches = self.symbols(query if not private else f"*{query}*", undecorated=private)
-        if private:
-            matches = [x for x in matches if x["name"] == query]
-        else:
-            matches = [x for x in matches if x["name"] == query]
-        addresses = sorted({x["rva"] for x in matches})
-        if len(addresses) != 1:
-            details = ", ".join(f"{x['name']}@0x{x['rva']:x}" for x in matches[:10]) or "none"
-            raise ValueError(f"symbol must resolve to one address: {query}: {details}")
-        preferred = next((x for x in matches if x["tag"] == SYM_TAG_FUNCTION), matches[0])
-        return preferred
+        callback = CALLBACK(collect)
+        if not self.dbg.SymEnumSymbolsW(self.process, self.module, "*", callback, None):
+            raise OSError(C.get_last_error(), "SymEnumSymbolsW failed")
+        return found, names_at
 
     def type_indices(self, name: str) -> list[int]:
         self.set_undecorated(True)
@@ -394,14 +392,32 @@ def main() -> int:
     resolved: dict[str, int] = {}
     hooks: dict[str, bool] = {}
     aliases: dict[int, list[str]] = {}
+    # Two passes serve every lookup: public symbols by mangled name for `symbol:` entries
+    # (what a masked lookup used to search), then all symbols by undecorated name for
+    # `private:` entries and for the folding check below, which needs every name at an
+    # address. Each name must still resolve to exactly one address.
+    public_queries = {r["symbol"] for r in spec["functions"].values() if "private" not in r}
+    private_queries = {r["private"] for r in spec["functions"].values() if "private" in r}
     with progress.section("functions", len(spec["functions"])):
+        progress.item = "pass 1: public symbols"
+        with progress.waiting("enumerating public symbols (mangled names)"):
+            public_found, _ = symbols.scan(undecorated=False, publics_only=True, wanted=public_queries,
+                                           by_address=False)
+        progress.log("  pass 1 (public symbols, mangled names) done")
+        progress.item = "pass 2: all symbols"
+        with progress.waiting("enumerating all symbols (undecorated names; reads the whole symbol stream)"):
+            private_found, names_at = symbols.scan(undecorated=True, publics_only=False, wanted=private_queries,
+                                                   by_address=True)
+        progress.log(f"  pass 2 (all symbols, undecorated names) done: {len(names_at)} addresses")
         for output_name, request in spec["functions"].items():
             progress.item = output_name
             is_private = "private" in request
             query = request.get("private") or request["symbol"]
-            with progress.waiting(f"looking up {output_name}"):
-                found = symbols.unique_symbol(query, private=is_private)
-            rva = found["rva"]
+            addresses = sorted((private_found if is_private else public_found)[query])
+            if len(addresses) != 1:
+                details = ", ".join(f"0x{x:x}" for x in addresses[:10]) or "none"
+                raise ValueError(f"symbol must resolve to one address: {query}: {details}")
+            rva = addresses[0]
             resolved[output_name] = rva
             hooks[output_name] = bool(request.get("hook", True))
             functions[output_name] = {
@@ -418,14 +434,11 @@ def main() -> int:
     collisions: dict[str, str] = {}
     hook_targets: dict[str, dict[str, str]] = {}
     with progress.section("hook targets (identical code folding)", sum(hooks.values())):
-        progress.item = "enumerating public symbols"
-        with progress.waiting("enumerating public symbols"):
-            symbols.public_symbol_map()
         for output_name, rva in resolved.items():
             if not hooks.get(output_name, True):
                 continue
             progress.item = output_name
-            others = symbols.symbols_at(rva) if len(aliases[rva]) == 1 else []
+            others = sorted(names_at.get(rva, ())) if len(aliases[rva]) == 1 else []
             if len(aliases[rva]) > 1:
                 collisions[output_name] = "requested more than once"
                 progress.log(f"  {output_name:<58} SHARED: requested more than once")
