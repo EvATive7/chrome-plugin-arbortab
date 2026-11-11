@@ -166,8 +166,11 @@ bitfields:
   cc::PaintFlags.antialias_: [cc::CorePaintFlags::PaintFlagsBitfields, antialias_]
   cc::PaintFlags.cap_type_: [cc::CorePaintFlags::PaintFlagsBitfields, cap_type_]
   cc::PaintFlags.style_: [cc::CorePaintFlags::PaintFlagsBitfields, style_]
+# Exact sizes the resolver insists on. Pin only types whose size version.dll actually relies
+# on: a pin that nothing depends on just blocks every Chrome release that changes the type
+# (TabView shrank from 0x690 to 0x688 in 157 while only its fields matter, and those are read
+# from the PDB). Every type used here or in `fields` is still reported under `sizes`.
 types:
-  TabView: 0x690
   views::LayoutManagerBase: 0x270
   UnpinnedTabContainerViewLayout: 0x278
   DraggedTabsContainer: 0x220

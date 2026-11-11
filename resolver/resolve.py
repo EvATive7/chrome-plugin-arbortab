@@ -275,13 +275,17 @@ class DbgHelp:
 def pdb_key_and_name(pe: pefile.PE) -> tuple[str, str]:
     pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DEBUG"]])
     for debug in pe.DIRECTORY_ENTRY_DEBUG:
-        entry = debug.entry
-        if hasattr(entry, "Signature_String"):
-            pdb_name = entry.PdbFileName.decode(errors="replace").rstrip("\0")
-            # pefile's Signature_String is already the symbol-server key: the
-            # 32 hex GUID digits followed by the hexadecimal Age. Appending
-            # entry.Age again produces a subtly invalid 34-character key.
-            return entry.Signature_String.upper(), Path(pdb_name).name
+        # Read the raw RSDS record (same as PdbKeyFromModule in native/src/core/offsets.cpp) instead of
+        # pefile's Signature_String, whose meaning (with or without the Age) changed between
+        # pefile releases.
+        raw = pe.get_data(debug.struct.AddressOfRawData, debug.struct.SizeOfData)
+        if raw[:4] != b"RSDS":
+            continue
+        data1, data2, data3 = struct.unpack_from("<IHH", raw, 4)
+        (age,) = struct.unpack_from("<I", raw, 20)
+        pdb_name = raw[24:].split(b"\0", 1)[0].decode(errors="replace")
+        key = f"{data1:08X}{data2:04X}{data3:04X}{raw[12:20].hex().upper()}{age:X}"
+        return key, Path(pdb_name).name
     raise ValueError("chrome.dll has no CodeView debug record")
 
 

@@ -78,7 +78,11 @@ jobs:
         shell: pwsh
         run: |
           $line = uv run --with pefile python -I tools/re/pdbinfo.py D:\arbortab\extracted\chrome.dll
+          if ($LASTEXITCODE -ne 0) { throw 'reading the PDB key failed' }
           $key = ($line -split ' ')[-1].Trim()
+          # 32 GUID hex digits + the Age in hex. Only catches gross breakage: a key with the Age
+          # appended twice still matches, which is why a long-missing PDB is reported below.
+          if ($key -cnotmatch '^[0-9A-F]{32}[0-9A-F]{1,8}$') { throw "Malformed PDB key: '$key'" }
           "key=$key" >> $env:GITHUB_OUTPUT
           Write-Host "PDB key: $key"
 
@@ -90,10 +94,21 @@ jobs:
           $url = 'https://chromium-browser-symsrv.commondatastorage.googleapis.com/chrome.dll.pdb/${{ steps.pdb.outputs.key }}/chrome.dll.pdb'
           curl.exe -L --fail --retry 5 --compressed --output D:\arbortab\chrome.dll.pdb $url
           if ($LASTEXITCODE -ne 0) {
-            # Google publishes symbols hours (sometimes days) after a release; the hourly
-            # schedule retries, so a missing PDB is a warning rather than a failure.
+            # Google publishes symbols hours (sometimes days) after a release; the scheduled
+            # runs retry, so a missing PDB is a warning rather than a failure.
             Write-Host "::warning::chrome.dll.pdb for ${{ steps.pdb.outputs.key }} is not on the symbol server yet"
             "available=false" >> $env:GITHUB_OUTPUT
+            # Missing for much longer than usual: more likely a wrong key than a slow upload
+            # (0.3.x waited days on a key with the Age appended twice). The installer's
+            # Last-Modified stands in for the release time.
+            $headers = curl.exe -sIL '${{ steps.chrome.outputs.url }}'
+            $modified = $headers | Select-String -Pattern '^last-modified:\s*(.+)$' | Select-Object -Last 1
+            if ($modified) {
+              $released = [DateTimeOffset]::Parse($modified.Matches[0].Groups[1].Value.Trim())
+              $hours = [int]([DateTimeOffset]::UtcNow - $released).TotalHours
+              Write-Host "Installer published $hours hours ago"
+              if ($hours -ge 48) { "stale=$hours" >> $env:GITHUB_OUTPUT }
+            }
             $global:LASTEXITCODE = 0
           } else {
             "available=true" >> $env:GITHUB_OUTPUT
@@ -104,6 +119,11 @@ jobs:
         shell: pwsh
         run: |
           uv run --with pefile --with pyyaml python resolver/resolve.py --dll D:\arbortab\extracted\chrome.dll --pdb D:\arbortab\chrome.dll.pdb --out "D:\arbortab\${{ steps.pdb.outputs.key }}.json"
+          if ($LASTEXITCODE -ne 0) { throw 'resolving the offsets failed' }
+          # The file name, the PDB we downloaded and the key version.dll will compare against
+          # must all be the same key.
+          $resolved = (Get-Content -Raw "D:\arbortab\${{ steps.pdb.outputs.key }}.json" | ConvertFrom-Json).pdbKey
+          if ($resolved -cne '${{ steps.pdb.outputs.key }}') { throw "PDB key mismatch: pdbinfo.py says ${{ steps.pdb.outputs.key }}, resolve.py says $resolved" }
 
       - name: Publish offsets branch
         if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'
@@ -167,6 +187,22 @@ jobs:
           }
           Pop-Location
           $global:LASTEXITCODE = 0
+
+      - name: Report long-missing PDB
+        if: steps.pdbfile.outputs.stale != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $title = "PDB missing for Chrome ${{ steps.chrome.outputs.version }}"
+          $existing = gh issue list --state open --search "in:title $title" --json number --jq '.[0].number'
+          if ($existing) { Write-Host "already reported in #$existing"; exit 0 }
+          $key = '${{ steps.pdb.outputs.key }}'
+          $body = "chrome.dll.pdb for key ``$key`` is still not on the symbol server ${{ steps.pdbfile.outputs.stale }} hours after the installer was published.`n`n" +
+            "First check the key itself (``uv run --with pefile python -I tools/re/pdbinfo.py <chrome.dll>`` must equal what version.dll logs), then the URL:`n" +
+            "https://chromium-browser-symsrv.commondatastorage.googleapis.com/chrome.dll.pdb/$key/chrome.dll.pdb`n`n" +
+            "Workflow: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          gh issue create --title $title --body $body
 
       - name: Create issue on failure
         if: failure() && steps.pdbfile.outputs.available != 'false'
