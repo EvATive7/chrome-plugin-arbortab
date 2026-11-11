@@ -352,7 +352,7 @@ def pdb_key_and_name(pe: pefile.PE) -> tuple[str, str]:
 
 def chrome_version(pe: pefile.PE) -> str:
     if not getattr(pe, "VS_FIXEDFILEINFO", None):
-        pe.parse_data_directories()
+        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_RESOURCE"]])
     info = pe.VS_FIXEDFILEINFO[0]
     return ".".join(map(str, [info.FileVersionMS >> 16, info.FileVersionMS & 0xFFFF, info.FileVersionLS >> 16, info.FileVersionLS & 0xFFFF]))
 
@@ -376,7 +376,9 @@ def main() -> int:
     progress = PROGRESS
     spec = yaml.safe_load(args.spec.read_text(encoding="utf-8"))
     with progress.section("chrome.dll"):
-        pe = pefile.PE(str(args.dll), fast_load=False)
+        # Headers and sections only: the debug and resource directories are parsed on demand.
+        # A full parse (imports, relocations, ...) of chrome.dll takes about 20 seconds.
+        pe = pefile.PE(str(args.dll), fast_load=True)
         key, pdb_name = pdb_key_and_name(pe)
         version = chrome_version(pe)
         progress.log(f"  Chrome {version}, PDB {pdb_name} key {key}")
