@@ -23,14 +23,16 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 180
     steps:
+      # Windows runners default to core.autocrlf=true: a checked-out offsets file would then
+      # differ from the bytes git stores and GitHub serves, and its signature would not match.
+      # Must run before the checkout: flipping it afterwards makes every file of the CRLF
+      # working tree look modified, and the publish step's `git switch` then refuses to run.
+      - name: Keep line endings as stored
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # Windows runners default to core.autocrlf=true: a checked-out offsets file would then
-      # differ from the bytes git stores and GitHub serves, and its signature would not match.
-      - name: Keep line endings as stored
-        run: git config --global core.autocrlf false
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -139,16 +141,19 @@ jobs:
           git fetch origin offsets:refs/remotes/origin/offsets 2>$null
           if ($LASTEXITCODE -eq 0) {
             git switch --force-create offsets origin/offsets
+            if ($LASTEXITCODE -ne 0) { throw 'switching to the offsets branch failed' }
           } else {
             git switch --orphan offsets
+            if ($LASTEXITCODE -ne 0) { throw 'creating the offsets branch failed' }
             git rm -rf . --quiet
           }
           uv run python -I D:\arbortab\offsets_index.py add . $schema $version $key "D:\arbortab\$key.json"
           if ($LASTEXITCODE -ne 0) { throw 'publishing the offsets failed' }
           git add -A index.json win64 .gitattributes
           git commit -m "offsets: Chrome $version (schema $schema)"
+          if ($LASTEXITCODE -ne 0) { throw 'committing the offsets failed' }
           git push origin offsets
-          $global:LASTEXITCODE = 0
+          if ($LASTEXITCODE -ne 0) { throw 'pushing the offsets branch failed' }
 
       # Every run: signs what is not signed yet (new tables, and any published before signing
       # existed) and applies a requested revocation. version.dll refuses unsigned files.
