@@ -19,9 +19,51 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Lists the builds Omaha currently serves that have no offsets under the current schema.
+  # Stable is several builds at once (staged rollout), not just the newest; see query-chrome.py.
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      builds: ${{ steps.chrome.outputs.builds }}
+      count: ${{ steps.chrome.outputs.count }}
+      schema: ${{ steps.schema.outputs.schema }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Read schema
+        id: schema
+        run: |
+          # Offsets are published per schema: a schema bump makes every version "unresolved".
+          echo "schema=$(sed -nE 's/^schema:\s*([0-9]+).*/\1/p' resolver/spec.yaml)" >> "$GITHUB_OUTPUT"
+
+      - name: Query stable Chrome builds
+        id: chrome
+        run: |
+          if git fetch origin offsets:refs/remotes/origin/offsets 2>/dev/null; then
+            git worktree add --detach ../offsets-branch origin/offsets
+          else
+            echo 'offsets branch does not exist yet; treating every build as unresolved'
+            mkdir -p ../offsets-branch
+          fi
+          uv run python tools/ci/query-chrome.py --published ../offsets-branch --schema '${{ steps.schema.outputs.schema }}' --github-output "$GITHUB_OUTPUT"
+
   resolve:
+    needs: plan
+    if: needs.plan.outputs.count != '0'
     runs-on: windows-latest
     timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      # One at a time: every build publishes onto the tip of the same offsets branch.
+      max-parallel: 1
+      matrix:
+        build: ${{ fromJSON(needs.plan.outputs.builds) }}
+    name: resolve ${{ matrix.build.version }}
     steps:
       # Windows runners default to core.autocrlf=true: a checked-out offsets file would then
       # differ from the bytes git stores and GitHub serves, and its signature would not match.
@@ -37,45 +79,16 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
-      - name: Query stable Chrome
-        id: chrome
-        shell: pwsh
-        run: uv run python tools/ci/query-chrome.py --github-output $env:GITHUB_OUTPUT
-
-      - name: Check whether version is already resolved
-        id: existing
-        shell: pwsh
-        run: |
-          # Offsets are published per schema: a schema bump makes every version "unresolved".
-          $schema = (Select-String -Path resolver/spec.yaml -Pattern '^schema:\s*(\d+)').Matches[0].Groups[1].Value
-          "schema=$schema" >> $env:GITHUB_OUTPUT
-          $exists = $false
-          git fetch origin offsets:refs/remotes/origin/offsets 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            git worktree add --detach D:\offsets-branch origin/offsets 2>$null
-            uv run python -I tools/ci/offsets_index.py has D:\offsets-branch $schema '${{ steps.chrome.outputs.version }}'
-            $exists = $LASTEXITCODE -eq 0
-            git worktree remove --force D:\offsets-branch
-          } else {
-            Write-Host 'offsets branch does not exist yet; treating this version as unresolved'
-          }
-          "exists=$($exists.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
-          # GitHub's pwsh wrapper fails a step when $LASTEXITCODE is non-zero, and the probe
-          # above is expected to fail until the first offsets are published.
-          $global:LASTEXITCODE = 0
-
       - name: Download and extract Chrome
-        if: steps.existing.outputs.exists != 'true'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path D:\arbortab | Out-Null
-          curl.exe -L --fail --retry 5 --output D:\arbortab\chrome-installer.exe '${{ steps.chrome.outputs.url }}'
+          curl.exe -L --fail --retry 5 --output D:\arbortab\chrome-installer.exe '${{ matrix.build.url }}'
           $actual = (Get-FileHash D:\arbortab\chrome-installer.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne '${{ steps.chrome.outputs.sha256 }}') { throw "Installer hash mismatch: $actual" }
-          ./tools/ci/extract-chrome.ps1 -Installer D:\arbortab\chrome-installer.exe -Output D:\arbortab\extracted -Version '${{ steps.chrome.outputs.version }}'
+          if ($actual -ne '${{ matrix.build.sha256 }}') { throw "Installer hash mismatch: $actual" }
+          ./tools/ci/extract-chrome.ps1 -Installer D:\arbortab\chrome-installer.exe -Output D:\arbortab\extracted -Version '${{ matrix.build.version }}'
 
       - name: Read PDB key
-        if: steps.existing.outputs.exists != 'true'
         id: pdb
         shell: pwsh
         run: |
@@ -89,7 +102,6 @@ jobs:
           Write-Host "PDB key: $key"
 
       - name: Download PDB
-        if: steps.existing.outputs.exists != 'true'
         id: pdbfile
         shell: pwsh
         run: |
@@ -103,7 +115,7 @@ jobs:
             # Missing for much longer than usual: more likely a wrong key than a slow upload
             # (0.3.x waited days on a key with the Age appended twice). The installer's
             # Last-Modified stands in for the release time.
-            $headers = curl.exe -sIL '${{ steps.chrome.outputs.url }}'
+            $headers = curl.exe -sIL '${{ matrix.build.url }}'
             $modified = $headers | Select-String -Pattern '^last-modified:\s*(.+)$' | Select-Object -Last 1
             if ($modified) {
               $released = [DateTimeOffset]::Parse($modified.Matches[0].Groups[1].Value.Trim())
@@ -117,7 +129,7 @@ jobs:
           }
 
       - name: Resolve and validate offsets
-        if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'
+        if: steps.pdbfile.outputs.available == 'true'
         shell: pwsh
         run: |
           uv run --with pefile --with pyyaml python resolver/resolve.py --dll D:\arbortab\extracted\chrome.dll --pdb D:\arbortab\chrome.dll.pdb --out "D:\arbortab\${{ steps.pdb.outputs.key }}.json"
@@ -130,16 +142,16 @@ jobs:
       # Informational: what the new table changes relative to the newest older one of the same
       # schema, in the log and on the run's summary page. Never fails the run.
       - name: Compare with the previous offsets
-        if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'
+        if: steps.pdbfile.outputs.available == 'true'
         continue-on-error: true
         shell: pwsh
         run: |
-          $schema = '${{ steps.existing.outputs.schema }}'
+          $schema = '${{ needs.plan.outputs.schema }}'
           $new = "D:\arbortab\${{ steps.pdb.outputs.key }}.json"
           git fetch origin offsets:refs/remotes/origin/offsets 2>$null
           if ($LASTEXITCODE -ne 0) { "No published offsets to compare with." >> $env:GITHUB_STEP_SUMMARY; exit 0 }
           git worktree add --detach D:\offsets-previous origin/offsets 2>$null
-          $previous = uv run python -I tools/ci/offsets_index.py previous D:\offsets-previous $schema '${{ steps.chrome.outputs.version }}'
+          $previous = uv run python -I tools/ci/offsets_index.py previous D:\offsets-previous $schema '${{ matrix.build.version }}'
           if ($LASTEXITCODE -eq 0 -and $previous) {
             uv run python -I tools/ci/offsets_diff.py $previous $new --summary $env:GITHUB_STEP_SUMMARY
           } else {
@@ -149,12 +161,12 @@ jobs:
           $global:LASTEXITCODE = 0
 
       - name: Publish offsets branch
-        if: steps.existing.outputs.exists != 'true' && steps.pdbfile.outputs.available == 'true'
+        if: steps.pdbfile.outputs.available == 'true'
         shell: pwsh
         run: |
-          $version = '${{ steps.chrome.outputs.version }}'
+          $version = '${{ matrix.build.version }}'
           $key = '${{ steps.pdb.outputs.key }}'
-          $schema = '${{ steps.existing.outputs.schema }}'
+          $schema = '${{ needs.plan.outputs.schema }}'
           # The script lives on main, which is about to be switched away.
           Copy-Item tools/ci/offsets_index.py D:\arbortab\offsets_index.py
           git config user.name github-actions[bot]
@@ -176,6 +188,49 @@ jobs:
           git push origin offsets
           if ($LASTEXITCODE -ne 0) { throw 'pushing the offsets branch failed' }
 
+      - name: Report long-missing PDB
+        if: steps.pdbfile.outputs.stale != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $title = "PDB missing for Chrome ${{ matrix.build.version }}"
+          $existing = gh issue list --state open --search "in:title $title" --json number --jq '.[0].number'
+          if ($existing) { Write-Host "already reported in #$existing"; exit 0 }
+          $key = '${{ steps.pdb.outputs.key }}'
+          $body = "chrome.dll.pdb for key ``$key`` is still not on the symbol server ${{ steps.pdbfile.outputs.stale }} hours after the installer was published.`n`n" +
+            "First check the key itself (``uv run --with pefile python -I tools/re/pdbinfo.py <chrome.dll>`` must equal what version.dll logs), then the URL:`n" +
+            "https://chromium-browser-symsrv.commondatastorage.googleapis.com/chrome.dll.pdb/$key/chrome.dll.pdb`n`n" +
+            "Workflow: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          gh issue create --title $title --body $body
+
+      - name: Create issue on failure
+        if: failure() && steps.pdbfile.outputs.available != 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $title = "Offsets failed for Chrome ${{ matrix.build.version }}"
+          $body = "Workflow: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`n`nResolver or validation failed; inspect the workflow log for the missing symbol/type/check."
+          $existing = gh issue list --state open --search "in:title $title" --json number --jq '.[0].number'
+          if ($existing) { gh issue comment $existing --body $body } else { gh issue create --title $title --body $body }
+
+  sign:
+    needs: [plan, resolve]
+    # Also when nothing was resolved, or one build failed: signing and revoking are independent.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: windows-latest
+    steps:
+      - name: Keep line endings as stored
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       # Every run: signs what is not signed yet (new tables, and any published before signing
       # existed) and applies a requested revocation. version.dll refuses unsigned files.
       - name: Sign the offsets branch
@@ -185,8 +240,6 @@ jobs:
         shell: pwsh
         run: |
           if (-not $env:OFFSETS_SIGNING_KEY) { throw 'The OFFSETS_SIGNING_KEY secret is not set; see AGENTS.md.' }
-          # The publish step may have switched this checkout to the offsets branch.
-          git checkout --force '${{ github.sha }}'
           git fetch origin offsets:refs/remotes/origin/offsets 2>$null
           if ($LASTEXITCODE -ne 0) { Write-Host 'nothing published yet'; $global:LASTEXITCODE = 0; exit 0 }
           git worktree add -B offsets D:\offsets-sign origin/offsets
@@ -213,30 +266,3 @@ jobs:
           }
           Pop-Location
           $global:LASTEXITCODE = 0
-
-      - name: Report long-missing PDB
-        if: steps.pdbfile.outputs.stale != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $title = "PDB missing for Chrome ${{ steps.chrome.outputs.version }}"
-          $existing = gh issue list --state open --search "in:title $title" --json number --jq '.[0].number'
-          if ($existing) { Write-Host "already reported in #$existing"; exit 0 }
-          $key = '${{ steps.pdb.outputs.key }}'
-          $body = "chrome.dll.pdb for key ``$key`` is still not on the symbol server ${{ steps.pdbfile.outputs.stale }} hours after the installer was published.`n`n" +
-            "First check the key itself (``uv run --with pefile python -I tools/re/pdbinfo.py <chrome.dll>`` must equal what version.dll logs), then the URL:`n" +
-            "https://chromium-browser-symsrv.commondatastorage.googleapis.com/chrome.dll.pdb/$key/chrome.dll.pdb`n`n" +
-            "Workflow: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
-          gh issue create --title $title --body $body
-
-      - name: Create issue on failure
-        if: failure() && steps.pdbfile.outputs.available != 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $title = "Offsets failed for Chrome ${{ steps.chrome.outputs.version }}"
-          $body = "Workflow: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID`n`nResolver or validation failed; inspect the workflow log for the missing symbol/type/check."
-          $existing = gh issue list --state open --search "in:title $title" --json number --jq '.[0].number'
-          if ($existing) { gh issue comment $existing --body $body } else { gh issue create --title $title --body $body }

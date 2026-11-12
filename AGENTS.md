@@ -94,7 +94,8 @@ uv run --with cryptography python tools/ci/offsets_sign.py revoke <root> <文件
 
 ## 偏移量
 
-- **生成**：`offsets.yml` 每 6 小时查询 stable 版本，PDB 上线后运行 resolver，发布到 `offsets` 分支。分支布局（由 `tools/ci/offsets_index.py` 维护，它也负责把旧布局迁移过来）：
+- **生成**：`offsets.yml` 每 6 小时运行：`plan` 用 `query-chrome.py` 找出 Omaha 当前分发、但当前 schema 下还没有偏移量的全部 stable 构建（最新两个大版本，每次最多 4 个），`resolve` 按版本逐个（串行）在 PDB 上线后运行 resolver 并发布到 `offsets` 分支，最后 `sign` 补签。
+  - **stable 同时有多个构建**：全新安装拿到最新版，升级的客户端按分批推送随机拿到其中一个（如 157 同时有 .79 与 .51/.52/.78）。只问“全新安装”会漏掉多数用户实际在用的版本，所以 `query-chrome.py` 会模拟多个已装版本反复做定时更新检查来采样，再用 chromiumdash 的发布列表按 `targetversionprefix` 补查。更新检查**不能带 `installsource="ondemandcheckforupdate"`**：手动检查会绕过分批推送，永远只返回最新版。分支布局（由 `tools/ci/offsets_index.py` 维护，它也负责把旧布局迁移过来）：
 
   ```
   index.json                       {"format": 2, "schemas": {"<schema>": {"<chrome 版本>": "<pdb key>"}}}
