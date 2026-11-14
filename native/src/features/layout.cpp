@@ -671,12 +671,19 @@ bool PrologueMatches(uint8_t* base, const FunctionEntry& entry) {
 }  // namespace
 
 bool InstallLayoutFeature(HMODULE chrome_dll, const Offsets& offsets, LayoutFeature& layout) {
-  constexpr const char* kName = "UnpinnedTabContainerViewLayout::CalculateProposedLayout";
-  const auto found = offsets.hooks.find(kName);
-  if (found == offsets.hooks.end()) {
-    ARB_WARN("layout hook target is not in the offsets table");
+  constexpr const char* kVerticalName =
+      "UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout";
+  constexpr const char* kSharedName =
+      "UnpinnedTabContainerViewLayout::CalculateProposedLayout";
+  const auto vertical = offsets.hooks.find(kVerticalName);
+  const auto shared = offsets.hooks.find(kSharedName);
+  if ((vertical != offsets.hooks.end()) == (shared != offsets.hooks.end())) {
+    ARB_WARN("offsets table must contain exactly one layout hook target");
     return false;
   }
+  const char* target_name = vertical != offsets.hooks.end() ? kVerticalName : kSharedName;
+  const FunctionEntry& target =
+      vertical != offsets.hooks.end() ? vertical->second : shared->second;
   const auto field = [&offsets](const char* name, uint32_t& out) {
     const auto entry = offsets.fields.find(name);
     if (entry == offsets.fields.end()) {
@@ -709,11 +716,11 @@ bool InstallLayoutFeature(HMODULE chrome_dll, const Offsets& offsets, LayoutFeat
   const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
   g_chrome_begin = reinterpret_cast<uintptr_t>(base);
   g_chrome_end = g_chrome_begin + nt->OptionalHeader.SizeOfImage;
-  if (!PrologueMatches(base, found->second)) {
-    ARB_WARN("prologue mismatch for %s; layout feature disabled", kName);
+  if (!PrologueMatches(base, target)) {
+    ARB_WARN("prologue mismatch for %s; layout feature disabled", target_name);
     return false;
   }
-  layout.rva = found->second.rva;
+  layout.rva = target.rva;
   layout.original = nullptr;
   const MH_STATUS created = MH_CreateHook(base + layout.rva,
                                           reinterpret_cast<LPVOID>(&HookCalculateLayout),
@@ -749,7 +756,7 @@ bool InstallLayoutFeature(HMODULE chrome_dll, const Offsets& offsets, LayoutFeat
   g_hold = hold;
   ARB_INFO("container height follows row motion: %s", g_hold.animate_host_size ? "on" : "off");
   layout.installed = true;
-  ARB_INFO("layout feature installed at 0x%08x", layout.rva);
+  ARB_INFO("layout feature installed from %s at 0x%08x", target_name, layout.rva);
   return true;
 }
 

@@ -396,9 +396,17 @@ def main() -> int:
     # (what a masked lookup used to search), then all symbols by undecorated name for
     # `private:` entries and for the folding check below, which needs every name at an
     # address. Each name must still resolve to exactly one address.
-    public_queries = {r["symbol"] for r in spec["functions"].values() if "private" not in r}
-    private_queries = {r["private"] for r in spec["functions"].values() if "private" in r}
-    with progress.section("functions", len(spec["functions"])):
+    # `oneOf` groups describe code Chrome has restructured: each alternative is a small spec
+    # (functions plus whatever fields/types/... only that shape needs). Exactly one alternative's
+    # functions must all resolve uniquely. Its sections are then merged into the spec and receive
+    # the same strict validation as the base sections, so the output never mixes two shapes.
+    groups: dict[str, list[dict[str, Any]]] = spec.get("oneOf", {})
+    all_requests = list(spec["functions"].values()) + [
+        request for alternatives in groups.values() for alternative in alternatives
+        for request in alternative["functions"].values()]
+    public_queries = {r["symbol"] for r in all_requests if "private" not in r}
+    private_queries = {r["private"] for r in all_requests if "private" in r}
+    with progress.section("functions", len(spec["functions"]) + len(groups)):
         progress.item = "pass 1: public symbols"
         with progress.waiting("enumerating public symbols (mangled names)"):
             public_found, _ = symbols.scan(undecorated=False, publics_only=True, wanted=public_queries,
@@ -409,11 +417,33 @@ def main() -> int:
             private_found, names_at = symbols.scan(undecorated=True, publics_only=False, wanted=private_queries,
                                                    by_address=True)
         progress.log(f"  pass 2 (all symbols, undecorated names) done: {len(names_at)} addresses")
+
+        def addresses_of(request: dict[str, Any]) -> list[int]:
+            if "private" in request:
+                return sorted(private_found[request["private"]])
+            return sorted(public_found[request["symbol"]])
+
+        for group_name, alternatives in groups.items():
+            progress.item = f"oneOf {group_name}"
+            complete = [index for index, alternative in enumerate(alternatives)
+                        if all(len(addresses_of(r)) == 1 for r in alternative["functions"].values())]
+            if len(complete) != 1:
+                shapes = " | ".join(", ".join(a["functions"]) for a in alternatives)
+                found = "none" if not complete else f"alternatives {complete}"
+                raise ValueError(f"oneOf {group_name}: exactly one alternative must resolve, got {found}: {shapes}")
+            chosen = alternatives[complete[0]]
+            for section, entries in chosen.items():
+                target = spec.setdefault(section, {})
+                if clash := set(target) & set(entries):
+                    raise ValueError(f"oneOf {group_name}: {section} already has {sorted(clash)}")
+                target.update(entries)
+            progress.entry(f"oneOf {group_name}", f"alternative {complete[0]}: {', '.join(chosen['functions'])}")
+
         for output_name, request in spec["functions"].items():
             progress.item = output_name
             is_private = "private" in request
             query = request.get("private") or request["symbol"]
-            addresses = sorted((private_found if is_private else public_found)[query])
+            addresses = addresses_of(request)
             if len(addresses) != 1:
                 details = ", ".join(f"0x{x:x}" for x in addresses[:10]) or "none"
                 raise ValueError(f"symbol must resolve to one address: {query}: {details}")

@@ -69,7 +69,13 @@ bool ChromeApi::IsStripCollapsed(const void* view) const {
 }
 
 bool ChromeApi::IsVertical(const void* layout) const {
-  if (!layout || !off_tab_orientation) {
+  if (!layout) {
+    return false;
+  }
+  if (layout_is_vertical_only) {
+    return true;
+  }
+  if (!off_tab_orientation) {
     return false;
   }
   return *reinterpret_cast<const int32_t*>(static_cast<const uint8_t*>(layout) +
@@ -145,13 +151,22 @@ bool ResolveChromeApi(HMODULE chrome_dll, const Offsets& offsets, ChromeApi& api
   resolved.off_tab_collapsed = field("TabView.collapsed_");
   resolved.off_tab_icon = field("TabView.icon_");
 
-  const auto missing = [&resolved]() {
+  constexpr const char* kVerticalLayout =
+      "UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout";
+  constexpr const char* kSharedLayout =
+      "UnpinnedTabContainerViewLayout::CalculateProposedLayout";
+  const bool has_vertical_layout = offsets.hooks.find(kVerticalLayout) != offsets.hooks.end();
+  const bool has_shared_layout = offsets.hooks.find(kSharedLayout) != offsets.hooks.end();
+  resolved.layout_is_vertical_only = has_vertical_layout;
+
+  const auto missing = [&resolved, has_vertical_layout, has_shared_layout]() {
     std::string text;
     if (!resolved.get_tab_interface) text += "GetTabInterface ";
     if (!resolved.id_for_tab) text += "IdForTab ";
     if (resolved.get_contents_slot < 0) text += "GetContentsSlot ";
     if (resolved.tab_view_vtables.empty()) text += "TabViewVtables ";
-    if (!resolved.off_tab_orientation) text += "orientation_ ";
+    if (has_vertical_layout == has_shared_layout) text += "LayoutHookTarget ";
+    if (has_shared_layout && !resolved.off_tab_orientation) text += "orientation_ ";
     if (!resolved.off_tab_collapsed) text += "TabView.collapsed_ ";
     return text;
   };
@@ -166,8 +181,9 @@ bool ResolveChromeApi(HMODULE chrome_dll, const Offsets& offsets, ChromeApi& api
   }
   api = resolved;
   api.ready = true;
-  ARB_INFO("chrome api resolved (%zu TabView vtables, GetContents slot %d)",
-           api.tab_view_vtables.size(), api.get_contents_slot);
+  ARB_INFO("chrome api resolved (%zu TabView vtables, GetContents slot %d, layout %s)",
+           api.tab_view_vtables.size(), api.get_contents_slot,
+           api.layout_is_vertical_only ? "vertical-only" : "shared");
   return true;
 }
 

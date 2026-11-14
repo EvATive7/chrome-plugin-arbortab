@@ -27,7 +27,8 @@ struct ChromeApi {
   void* manager_invalidate = nullptr; // void (*)(void* layout_manager)
   int get_contents_slot = 3;
   std::vector<void*> tab_view_vtables;
-  uint32_t off_tab_orientation = 0;   // UnpinnedTabContainerViewLayout::orientation_
+  bool layout_is_vertical_only = false;  // The hooked layout class only serves vertical tabs.
+  uint32_t off_tab_orientation = 0;      // Shared layout's orientation_ (Chrome <= 157)
   uint32_t off_tab_collapsed = 0;     // TabView::collapsed_ (vertical strip collapsed to icons)
   uint32_t off_tab_icon = 0;          // TabView::icon_
 
@@ -37,6 +38,8 @@ struct ChromeApi {
   int TabIdOf(const void* view) const;
   // Is this TabView shown in "collapsed strip" (icon-only) mode?
   bool IsStripCollapsed(const void* view) const;
+  // True for the vertical-only layout class, or when the older shared layout object says its
+  // current orientation is vertical.
   bool IsVertical(const void* layout) const;
 
   void InvalidateLayout(void* view) const;

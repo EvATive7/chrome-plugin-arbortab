@@ -1,10 +1,8 @@
 # Offsets schema: must equal kOffsetsSchema (native/src/core/offsets.h). Bump both when the
 # module starts to depend on entries older files lack; see AGENTS.md ("偏移量").
-schema: 2
+schema: 3
 platform: win64
 functions:
-  UnpinnedTabContainerViewLayout::CalculateProposedLayout:
-    symbol: "?CalculateProposedLayout@UnpinnedTabContainerViewLayout@@UEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z"
   TabView::OnMousePressed:
     symbol: "?OnMousePressed@TabView@@EEAA_NAEBVMouseEvent@ui@@@Z"
   TabView::OnPaint:
@@ -16,8 +14,6 @@ functions:
   DraggedTabsContainer::OnTabDragEnded:
     hook: false
     symbol: "?OnTabDragEnded@DraggedTabsContainer@@UEAAXXZ"
-  TabDragHandlerImpl::EndDrag:
-    symbol: "?EndDrag@TabDragHandlerImpl@@UEAAXW4EndDragReason@@@Z"
   TabView::GetTabInterface:
     hook: false
     private: "TabView::GetTabInterface"
@@ -108,6 +104,32 @@ functions:
   gfx::Canvas::DrawStringRect:
     hook: false
     symbol: "?DrawStringRect@Canvas@gfx@@QEAAXV?$basic_string_view@_SU?$char_traits@_S@__Cr@std@@@__Cr@std@@AEBVFontList@2@IAEBVRect@2@@Z"
+# Code Chrome has restructured. Exactly one alternative's functions must all resolve uniquely;
+# its sections are merged into the ones above and then validated normally, so a table only names
+# what its build has.
+oneOf:
+  # The layout of the unpinned tabs. Up to 157 one class serves both orientations and picks the
+  # vertical branch by orientation_; 158 split it into ...VerticalLayout / ...HorizontalLayout.
+  # version.dll hooks whichever function the table names (see features/layout.cpp).
+  unpinned tab layout:
+    - functions:
+        UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout:
+          symbol: "?CalculateProposedLayout@UnpinnedTabContainerViewVerticalLayout@@MEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z"
+    - functions:
+        UnpinnedTabContainerViewLayout::CalculateProposedLayout:
+          symbol: "?CalculateProposedLayout@UnpinnedTabContainerViewLayout@@UEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z"
+      fields:
+        UnpinnedTabContainerViewLayout.orientation_: [UnpinnedTabContainerViewLayout, orientation_]
+      types:
+        UnpinnedTabContainerViewLayout: 0x278
+  # The drag handler interface and implementation were collapsed into one concrete class in 158.
+  tab drag handler:
+    - functions:
+        TabDragHandler::EndDrag:
+          symbol: "?EndDrag@TabDragHandler@@QEAAXW4EndDragReason@@@Z"
+    - functions:
+        TabDragHandlerImpl::EndDrag:
+          symbol: "?EndDrag@TabDragHandlerImpl@@UEAAXW4EndDragReason@@@Z"
 vtables:
   TabView: "TabView::`vftable'"
   tabs::TabModel: "tabs::TabModel::`vftable'"
@@ -135,7 +157,6 @@ fields:
   cc::CorePaintFlags.color_: [cc::CorePaintFlags, color_]
   cc::CorePaintFlags.width_: [cc::CorePaintFlags, width_]
   cc::CorePaintFlags.bitfields_: [cc::CorePaintFlags, bitfields_]
-  UnpinnedTabContainerViewLayout.orientation_: [UnpinnedTabContainerViewLayout, orientation_]
   DraggedTabsContainer.host_view_: [DraggedTabsContainer, host_view_]
   DraggedTabsContainer.collection_node_: [DraggedTabsContainer, collection_node_]
   DraggedTabsContainer.dragging_views_: [DraggedTabsContainer, dragging_views_]
@@ -172,7 +193,6 @@ bitfields:
 # from the PDB). Every type used here or in `fields` is still reported under `sizes`.
 types:
   views::LayoutManagerBase: 0x270
-  UnpinnedTabContainerViewLayout: 0x278
   DraggedTabsContainer: 0x220
   TabCollectionNode: 0x118
   ui::Event: 0xb0

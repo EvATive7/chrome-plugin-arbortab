@@ -290,7 +290,7 @@ void HookHandleTabDragInContainer(void* self, const void* dragged_bounds, const 
   // Swallowed on purpose: no native reorder while dragging inside the tree strip.
 }
 
-// void TabDragHandlerImpl::EndDrag(EndDragReason reason)
+// void TabDragHandler[Impl]::EndDrag(EndDragReason reason)
 using EndDragFn = void (*)(void* self, int reason);
 
 void HookEndDrag(void* self, int reason) {
@@ -462,14 +462,26 @@ bool InstallDragFeature(HMODULE chrome_dll, const Offsets& offsets, DragFeature&
     return true;
   };
 
+  constexpr const char* kConcreteEndDrag = "TabDragHandler::EndDrag";
+  constexpr const char* kImplEndDrag = "TabDragHandlerImpl::EndDrag";
+  const auto concrete_end = offsets.hooks.find(kConcreteEndDrag);
+  const auto impl_end = offsets.hooks.find(kImplEndDrag);
+  // Ending the drag is required to clear the drop target and report the result. Chrome 158
+  // collapsed TabDragHandlerImpl into the concrete TabDragHandler class; the ABI stayed the same.
+  if ((concrete_end != offsets.hooks.end()) == (impl_end != offsets.hooks.end())) {
+    ARB_WARN("offsets table must contain exactly one EndDrag hook target");
+    return false;
+  }
+  const char* end_name =
+      concrete_end != offsets.hooks.end() ? kConcreteEndDrag : kImplEndDrag;
+
   const bool handle_ok =
       attach("DraggedTabsContainer::HandleTabDragInContainer",
              reinterpret_cast<void*>(&HookHandleTabDragInContainer), &g_feature.handle_original,
              g_feature.handle_rva);
-  // Ending the drag is best effort: without it the state would simply never be reported.
-  const bool end_ok = attach("TabDragHandlerImpl::EndDrag",
-                             reinterpret_cast<void*>(&HookEndDrag), &g_feature.end_original,
-                             g_feature.end_rva);
+  const bool end_ok = handle_ok &&
+      attach(end_name, reinterpret_cast<void*>(&HookEndDrag), &g_feature.end_original,
+             g_feature.end_rva);
 
   auto* module = reinterpret_cast<uint8_t*>(chrome_dll);
   const auto function = [&offsets, module](const char* name) -> void* {

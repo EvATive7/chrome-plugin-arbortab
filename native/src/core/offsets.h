@@ -14,7 +14,7 @@ namespace arbortab {
 // Bump it whenever the module needs entries older files do not have, or the format changes:
 // files live under win64/s<schema>/ remotely and offsets\s<schema>\ locally, so a new
 // schema never reads a stale cache. See AGENTS.md ("偏移量").
-constexpr int kOffsetsSchema = 2;
+constexpr int kOffsetsSchema = 3;
 
 // Lifecycle of the offsets pipeline, reported to the extension.
 enum class OffsetsStatus {
