@@ -1,0 +1,301 @@
+{
+  "schema": 3,
+  "chromeVersion": "157.0.8103.79",
+  "pdbName": "chrome.dll.pdb",
+  "pdbKey": "57DD8BAFFD89996F4C4C44205044422E1",
+  "generatedAt": "2026-11-14T14:37:37Z",
+  "functions": {
+    "TabView::OnMousePressed": {
+      "rva": "0x0a073570",
+      "prologue": "41 56 56 57 55 53 48 83 ec 70 48 8b 05 bf ea d2"
+    },
+    "TabView::OnPaint": {
+      "rva": "0x0a073f30",
+      "prologue": "56 57 48 83 ec 28 48 89 d6 48 89 cf 80 b9 15 06"
+    },
+    "TabView::PaintChildren": {
+      "rva": "0x0a073e50",
+      "prologue": "56 57 53 48 83 ec 70 0f 29 74 24 60 48 89 d6 48"
+    },
+    "DraggedTabsContainer::HandleTabDragInContainer": {
+      "rva": "0x0a048660",
+      "prologue": "41 56 56 57 55 53 48 83 ec 20 4c 89 c7 48 89 d3"
+    },
+    "DraggedTabsContainer::OnTabDragEnded": {
+      "rva": "0x0a0487e0",
+      "prologue": "56 48 83 ec 20 48 89 ce e8 33 00 00 00 48 8b 06"
+    },
+    "TabView::GetTabInterface": {
+      "rva": "0x0a0722d0",
+      "prologue": "56 57 48 83 ec 38 48 8b 05 63 fd d2 07 48 31 e0"
+    },
+    "sessions::SessionTabHelper::IdForTab": {
+      "rva": "0x019aa420",
+      "prologue": "56 57 48 83 ec 28 48 89 ce bf ff ff ff ff 48 85"
+    },
+    "tabs::TabModel::GetContents": {
+      "rva": "0x05aaec00",
+      "prologue": "48 8b 41 40 c3 cc cc cc cc cc cc cc cc cc cc cc"
+    },
+    "views::View::InvalidateLayout": {
+      "rva": "0x042e0120",
+      "prologue": "41 57 41 56 41 55 41 54 56 57 55 53 48 83 ec 68"
+    },
+    "views::LayoutManagerBase::Layout": {
+      "rva": "0x00640e00",
+      "prologue": "56 57 55 53 48 83 ec 78 48 89 ce 48 8b 05 2e 12"
+    },
+    "views::LayoutManagerBase::InvalidateLayout": {
+      "rva": "0x046872c0",
+      "prologue": "56 57 55 53 48 83 ec 28 80 b9 98 00 00 00 00 75"
+    },
+    "views::Label::GetDefaultFontList": {
+      "rva": "0x0adff510",
+      "prologue": "48 83 ec 28 48 8b 0d 45 67 12 07 48 8b 01 48 8b"
+    },
+    "views::View::SchedulePaint": {
+      "rva": "0x047ef2f0",
+      "prologue": "56 48 83 ec 40 48 89 ce 48 8b 05 41 2d 5b 0d 48"
+    },
+    "views::View::OnPaint": {
+      "rva": "0x00a67ba0",
+      "prologue": "56 57 53 48 83 ec 70 48 89 d6 48 89 cf 48 8b 05"
+    },
+    "TabIcon::OnPaint": {
+      "rva": "0x01247e40",
+      "prologue": "41 57 41 56 41 54 56 57 53 48 83 ec 68 48 89 d6"
+    },
+    "views::View::GetColorProvider": {
+      "rva": "0x04be2660",
+      "prologue": "48 83 ec 28 48 8b 01 48 8b 40 58 48 8d 15 8e df"
+    },
+    "ui::ColorProvider::GetColor": {
+      "rva": "0x043876e0",
+      "prologue": "41 57 41 56 41 54 56 57 55 53 48 83 ec 20 89 d7"
+    },
+    "cc::PaintFlags::PaintFlags": {
+      "rva": "0x05d0a4f0",
+      "prologue": "48 89 c8 0f 10 05 36 24 53 0a 0f 11 01 f2 0f 10"
+    },
+    "gfx::Canvas::DrawRoundRect": {
+      "rva": "0x0b097290",
+      "prologue": "48 83 ec 48 48 8b 05 a5 ad d0 06 48 31 e0 48 89"
+    },
+    "gfx::Canvas::DrawLine": {
+      "rva": "0x0b096eb0",
+      "prologue": "48 83 ec 38 48 8b 89 c0 00 00 00 f3 41 0f 10 18"
+    },
+    "gfx::Canvas::SaveLayerAlpha": {
+      "rva": "0x03735100",
+      "prologue": "0f b6 c2 f3 0f 2a c8 48 8b 89 c0 00 00 00 f3 0f"
+    },
+    "TabView::Layout": {
+      "rva": "0x0a073060",
+      "prologue": "56 57 53 48 83 ec 30 48 8b 05 d2 ef d2 07 48 31"
+    },
+    "views::View::SetBoundsRect": {
+      "rva": "0x04c684c0",
+      "prologue": "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec e8"
+    },
+    "gfx::Canvas::Save": {
+      "rva": "0x037350e0",
+      "prologue": "48 8b 89 c0 00 00 00 48 8b 01 48 8b 40 20 48 ff"
+    },
+    "gfx::Canvas::Restore": {
+      "rva": "0x03735130",
+      "prologue": "48 8b 89 c0 00 00 00 48 8b 01 48 8b 40 50 48 ff"
+    },
+    "gfx::Canvas::DrawStringRectWithFlags": {
+      "rva": "0x0b096250",
+      "prologue": "41 57 41 56 41 55 41 54 56 57 55 53 48 81 ec e8"
+    },
+    "gfx::GetStringWidth": {
+      "rva": "0x01518f00",
+      "prologue": "48 83 ec 38 48 8b 05 35 91 88 10 48 31 e0 48 89"
+    },
+    "gfx::FontList::GetBaseline": {
+      "rva": "0x00200e90",
+      "prologue": "48 8b 09 e9 08 00 00 00 cc cc cc cc cc cc cc cc"
+    },
+    "gfx::FontList::GetCapHeight": {
+      "rva": "0x03216ef0",
+      "prologue": "48 83 ec 28 48 8b 09 e8 a4 af 2c 01 48 83 78 08"
+    },
+    "views::View::SetPaintToLayer": {
+      "rva": "0x00fb7950",
+      "prologue": "56 57 48 83 ec 28 89 d7 48 89 ce 80 b9 4c 02 00"
+    },
+    "views::View::DestroyLayer": {
+      "rva": "0x031ecbc0",
+      "prologue": "c6 81 4c 02 00 00 00 80 b9 4d 02 00 00 00 75 23"
+    },
+    "ui::Layer::SetOpacity": {
+      "rva": "0x0114ab30",
+      "prologue": "56 57 48 83 ec 38 0f 29 74 24 20 0f 28 f1 48 89"
+    },
+    "gfx::FontList::GetHeight": {
+      "rva": "0x059e4ac0",
+      "prologue": "41 57 41 56 41 54 56 57 55 53 48 83 ec 20 48 8b"
+    },
+    "gfx::FontList::DeriveWithSizeDelta": {
+      "rva": "0x03216d80",
+      "prologue": "41 56 56 57 55 53 48 83 ec 20 44 89 c7 48 89 d6"
+    },
+    "gfx::Canvas::FillRect": {
+      "rva": "0x017f6480",
+      "prologue": "56 48 83 c4 80 48 8b 05 b4 bb 5a 10 48 31 e0 48"
+    },
+    "gfx::Canvas::DrawStringRect": {
+      "rva": "0x0b097830",
+      "prologue": "41 57 41 56 56 57 53 48 83 ec 50 44 89 ce 4c 89"
+    },
+    "UnpinnedTabContainerViewLayout::CalculateProposedLayout": {
+      "rva": "0x0a078e50",
+      "prologue": "41 57 41 56 56 57 53 48 83 ec 20 48 89 d6 48 8b"
+    },
+    "TabDragHandlerImpl::EndDrag": {
+      "rva": "0x0a05eac0",
+      "prologue": "56 57 48 83 ec 28 89 d6 48 89 cf e8 10 01 b3 00"
+    }
+  },
+  "hooks": {
+    "TabView::OnMousePressed": {
+      "rva": "0x0a073570"
+    },
+    "TabView::OnPaint": {
+      "rva": "0x0a073f30"
+    },
+    "TabView::PaintChildren": {
+      "rva": "0x0a073e50"
+    },
+    "DraggedTabsContainer::HandleTabDragInContainer": {
+      "rva": "0x0a048660"
+    },
+    "views::View::OnPaint": {
+      "rva": "0x00a67ba0"
+    },
+    "TabIcon::OnPaint": {
+      "rva": "0x01247e40"
+    },
+    "TabView::Layout": {
+      "rva": "0x0a073060"
+    },
+    "UnpinnedTabContainerViewLayout::CalculateProposedLayout": {
+      "rva": "0x0a078e50"
+    },
+    "TabDragHandlerImpl::EndDrag": {
+      "rva": "0x0a05eac0"
+    }
+  },
+  "vtables": {
+    "TabView": [
+      "0x0fd33ab0",
+      "0x0fd33ad0",
+      "0x0fd33af0",
+      "0x0fd33b10",
+      "0x0fd33b50",
+      "0x0fd33ba0",
+      "0x0fd33bb8",
+      "0x0fd33bd0",
+      "0x0fd33bf0",
+      "0x0fd33c00",
+      "0x0ffb8948",
+      "0x0ffd9938",
+      "0x1006fc40"
+    ],
+    "tabs::TabModel": [
+      "0x0fda4990",
+      "0x0ffd2e48"
+    ],
+    "TabCollectionAnimatingLayoutManager": [
+      "0x0fd32750",
+      "0x0fd32810"
+    ]
+  },
+  "vtableSlots": {
+    "tabs::TabModel::GetContents": 3
+  },
+  "fields": {
+    "TabView.collection_node_": "0x410",
+    "TabView.title_": "0x428",
+    "TabView.icon_": "0x430",
+    "TabView.close_button_": "0x440",
+    "TabView.active_": "0x610",
+    "TabView.selected_": "0x611",
+    "TabView.hovered_": "0x612",
+    "TabView.collapsed_": "0x614",
+    "TabView.pinned_": "0x615",
+    "views::View.parent_": "0x198",
+    "views::View.layout_manager_": "0x208",
+    "TabCollectionAnimatingLayoutManager.animate_host_size_": "0x7b8",
+    "TabCollectionAnimatingLayoutManager.starting_layout_": "0x288",
+    "TabCollectionAnimatingLayoutManager.current_layout_": "0x5a8",
+    "ui::LayerOwner.layer_": "0x10",
+    "cc::CorePaintFlags.color_": "0x0",
+    "cc::CorePaintFlags.width_": "0x10",
+    "cc::CorePaintFlags.bitfields_": "0x18",
+    "DraggedTabsContainer.host_view_": "0x18",
+    "DraggedTabsContainer.collection_node_": "0x20",
+    "DraggedTabsContainer.dragging_views_": "0x48",
+    "TabCollectionNode.type_": "0xa8",
+    "TabCollectionNode.node_data_": "0xb8",
+    "TabCollectionNode.children_": "0xc8",
+    "TabCollectionNode.node_view_": "0x100",
+    "ui::Event.flags_": "0x50",
+    "ui::LocatedEvent.location_": "0xb0",
+    "views::LayoutManagerBase.host_view_": "0x38",
+    "views::View.bounds_": "0x1c8",
+    "views::View.children_": "0x1a0",
+    "views::View.visible_": "0x1d8",
+    "views::ProposedLayout.host_size": "0x0",
+    "views::ProposedLayout.child_layouts": "0x8",
+    "views::ChildLayout.child_view": "0x0",
+    "views::ChildLayout.visible": "0x8",
+    "views::ChildLayout.bounds": "0xc",
+    "views::ChildLayout.available_size": "0x1c",
+    "UnpinnedTabContainerViewLayout.orientation_": "0x270"
+  },
+  "constants": {
+    "ui::kColorSysPrimary": 98,
+    "ui::kColorSysOnSurface": 114,
+    "ui::kColorSysOnSurfaceSubtle": 137,
+    "ui::kColorSysTonalContainer": 140
+  },
+  "bitfields": {
+    "cc::PaintFlags.antialias_": {
+      "bit": 0,
+      "width": 1
+    },
+    "cc::PaintFlags.cap_type_": {
+      "bit": 2,
+      "width": 2
+    },
+    "cc::PaintFlags.style_": {
+      "bit": 6,
+      "width": 2
+    }
+  },
+  "bases": {
+    "views::View>ui::LayerOwner": "0x10"
+  },
+  "sizes": {
+    "views::LayoutManagerBase": "0x270",
+    "DraggedTabsContainer": "0x220",
+    "TabCollectionNode": "0x118",
+    "ui::Event": "0xb0",
+    "ui::LocatedEvent": "0xc0",
+    "views::ProposedLayout": "0x190",
+    "views::ChildLayout": "0x30",
+    "cc::PaintFlags": "0x48",
+    "gfx::FontList": "0x8",
+    "UnpinnedTabContainerViewLayout": "0x278",
+    "TabView": "0x688",
+    "views::View": "0x318",
+    "TabCollectionAnimatingLayoutManager": "0x7c0",
+    "ui::LayerOwner": "0x58",
+    "cc::CorePaintFlags": "0x1c"
+  },
+  "checks": {
+    "ChildLayoutList": "absl::InlinedVector<views::ChildLayout,8>"
+  }
+}
