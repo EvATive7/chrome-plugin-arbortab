@@ -272,7 +272,7 @@ git sparse-checkout set --no-cone <目录...>
   ```
 
   预先在 `Default\Preferences` 写入 `{"vertical_tabs":{"enabled":true,"collapsed_state":false,"uncollapsed_width":240}}`，启动后直接显示垂直标签。
-- **加载扩展**：通过 CDP 浏览器级 WebSocket 发送 `Extensions.loadUnpacked {path}`。Chrome 137+ 正式版已不支持 `--load-extension`；Chrome 158+ 还会在 profile 的开发者模式关闭时以 `DISABLE_UNSUPPORTED_DEVELOPER_EXTENSION` 禁用加载结果，`sandbox.py` 会在沙盒 Preferences 中打开开发者模式。
+- **加载扩展**：通过 CDP 浏览器级 WebSocket 发送 `Extensions.loadUnpacked {path}`。Chrome 137+ 正式版已不支持 `--load-extension`；Chrome 158+ 还会在 profile 的开发者模式关闭时以 `DISABLE_UNSUPPORTED_DEVELOPER_EXTENSION` 禁用加载结果。该设置存在带哈希保护的 `Secure Preferences`，不能可靠地直接改 JSON；`dev.py` 会先通过沙盒自己的 `chrome://extensions` 页面打开开发者模式，再加载扩展。
 - **沙盒扩展副本与开发桥**：`dev.py` 不直接加载 `extension/`，而是每次复制到 `<ARBORTAB_SANDBOX>\extension` 再加载，并注册独立的开发宿主 `com.arbortab.bridge.dev`（`HKCU\...\NativeMessagingHosts\com.arbortab.bridge.dev`，清单在 `<ARBORTAB_SANDBOX>\bridge\`），从不改写正式宿主 `com.arbortab.bridge`，所以本机装的 Chrome 不受影响。
   - 副本相对源码**只有两处替换**：`native-link.js` 的宿主名改为开发宿主，`service-worker.js` 多一行运行标记（`globalThis.__arbortabDevBuild`）。不要在 `prepare_extension()` 里加别的改动，否则沙盒测的和发布的就不是同一份代码。
   - 改了 `extension/` 后要重跑 `dev.ps1`（可加 `-NoBuild`）；在 `chrome://extensions` 里点“重新加载”只会重载旧副本。

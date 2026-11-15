@@ -165,6 +165,74 @@ def browser_call(method: str, params: dict | None = None) -> dict:
         ws.close()
 
 
+def ensure_extension_developer_mode() -> None:
+    """Enables the sandbox profile's extension developer mode through Chrome itself.
+
+    Chrome 158 stores this setting in hash-protected Secure Preferences, so editing the profile
+    JSON before launch is ignored for an existing profile. The chrome://extensions toggle uses
+    Chrome's normal preference path and must be on before Extensions.loadUnpacked runs.
+    """
+    import websocket  # noqa: PLC0415
+
+    target_id = browser_call("Target.createTarget", {"url": "chrome://extensions/"})["targetId"]
+    try:
+        deadline = time.time() + 10
+        target = None
+        while time.time() < deadline:
+            with urllib.request.urlopen(
+                    f"http://127.0.0.1:{sandbox.PORT}/json", timeout=2) as response:
+                target = next(
+                    (item for item in json.load(response) if item["id"] == target_id), None)
+            if target and target.get("webSocketDebuggerUrl"):
+                break
+            time.sleep(0.2)
+        if not target or not target.get("webSocketDebuggerUrl"):
+            raise SystemExit("chrome://extensions did not become inspectable")
+
+        ws = websocket.create_connection(target["webSocketDebuggerUrl"], timeout=5,
+                                         suppress_origin=True)
+        try:
+            expression = """(() => {
+              const manager = document.querySelector('extensions-manager');
+              const toolbar = manager?.shadowRoot?.querySelector('extensions-toolbar');
+              const toggle = toolbar?.shadowRoot?.querySelector('#devMode');
+              if (!toggle) return 'waiting';
+              if (toggle.checked) return 'ready';
+              if (toggle.disabled) return 'disabled';
+              toggle.click();
+              return toggle.checked ? 'enabled' : 'failed';
+            })()"""
+            result = "waiting"
+            request_id = 0
+            while time.time() < deadline and result == "waiting":
+                request_id += 1
+                ws.send(json.dumps({"id": request_id, "method": "Runtime.evaluate", "params": {
+                    "expression": expression, "returnByValue": True}}))
+                while True:
+                    reply = json.loads(ws.recv())
+                    if reply.get("id") == request_id:
+                        break
+                result = reply.get("result", {}).get("result", {}).get("value", "failed")
+                if result == "waiting":
+                    time.sleep(0.2)
+            if result not in {"ready", "enabled"}:
+                raise SystemExit(f"could not enable extension developer mode: {result}")
+        finally:
+            ws.close()
+    finally:
+        try:
+            browser_call("Target.closeTarget", {"targetId": target_id})
+            close_deadline = time.time() + 3
+            while time.time() < close_deadline:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{sandbox.PORT}/json", timeout=2) as response:
+                    if all(item["id"] != target_id for item in json.load(response)):
+                        break
+                time.sleep(0.1)
+        except Exception:
+            pass
+
+
 def evaluate_worker(worker: dict, expression: str) -> object:
     import websocket  # noqa: PLC0415
 
@@ -288,6 +356,7 @@ def main() -> int:
     log_start = LOG.stat().st_size if LOG.exists() else 0
     step("starting the sandbox Chrome")
     launch()
+    ensure_extension_developer_mode()
     step(f"loading the extension from {DEV_EXTENSION}")
     load_extension()
     connection_start = LOG.stat().st_size if LOG.exists() else 0
