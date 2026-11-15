@@ -49,11 +49,11 @@ export function nativeOutdated(nativeVersion, extensionVersion) {
   return false;
 }
 
-/** Pure decision used before showing the one-time settings reminder. */
+/** Pure decision used before showing the once-per-browser-session settings reminder. */
 export function nativeUpdatePromptDecision({
   nativeVersion,
   extensionVersion,
-  shownKeys = [],
+  shownThisSession = false,
   initialInstall = false,
 }) {
   const key = `${extensionVersion}|${nativeVersion}`;
@@ -61,7 +61,7 @@ export function nativeUpdatePromptDecision({
     key,
     shouldOpen: nativeOutdated(nativeVersion, extensionVersion)
       && !initialInstall
-      && !shownKeys.includes(key),
+      && !shownThisSession,
   };
 }
 

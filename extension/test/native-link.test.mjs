@@ -84,24 +84,24 @@ test('the native update prompt is suppressed on initial installation', () => {
   }), { key: '0.2.1|0.2.0', shouldOpen: false });
 });
 
-test('the native update prompt is not repeated for a shown version pair', () => {
+test('the native update prompt is not repeated in the same browser session', () => {
   assert.equal(nativeUpdatePromptDecision({
     nativeVersion: '0.2.0',
     extensionVersion: '0.2.1',
-    shownKeys: ['0.2.1|0.2.0'],
+    shownThisSession: true,
   }).shouldOpen, false);
-});
-
-test('the native update prompt may open after either version changes', () => {
-  assert.equal(nativeUpdatePromptDecision({
-    nativeVersion: '0.2.0',
-    extensionVersion: '0.2.2',
-    shownKeys: ['0.2.1|0.2.0'],
-  }).shouldOpen, true);
   assert.equal(nativeUpdatePromptDecision({
     nativeVersion: '0.2.1',
     extensionVersion: '0.2.2',
-    shownKeys: ['0.2.2|0.2.0'],
+    shownThisSession: true,
+  }).shouldOpen, false);
+});
+
+test('the native update prompt may open again in a new browser session', () => {
+  assert.equal(nativeUpdatePromptDecision({
+    nativeVersion: '0.2.0',
+    extensionVersion: '0.2.1',
+    shownThisSession: false,
   }).shouldOpen, true);
 });
 

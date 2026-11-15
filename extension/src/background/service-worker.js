@@ -24,7 +24,8 @@ const DEFAULT_CONFIG = {
 const LEGACY_HIGHLIGHT_COLORS = new Set(['#663D7EFF', '#998B5CF6']);
 
 const SESSION_KEY = 'arbortab.windows';
-const NATIVE_UPDATE_PROMPTS_KEY = 'arbortab.nativeUpdatePrompts';
+const LEGACY_NATIVE_UPDATE_PROMPTS_KEY = 'arbortab.nativeUpdatePrompts';
+const NATIVE_UPDATE_PROMPT_SESSION_KEY = 'arbortab.nativeUpdatePromptShown';
 const INITIAL_INSTALL_PENDING_KEY = 'arbortab.initialInstallPending';
 const NATIVE_UPDATE_DELAY_MS = 5000;
 
@@ -43,7 +44,7 @@ let lastSentVersion = -1;
 let sendTimer = null;
 let initialized = null;
 let initialInstall = false;
-const scheduledNativeUpdatePrompts = new Set();
+let nativeUpdatePromptScheduled = false;
 
 const link = new NativeLink({
   onMessage: handleNativeMessage,
@@ -1036,55 +1037,50 @@ async function openNativeUpdateSettings(normalWindows) {
 
 function scheduleNativeUpdatePrompt(nativeVersion) {
   const extensionVersion = chrome.runtime.getManifest().version;
-  const candidateKey = `${extensionVersion}|${nativeVersion}`;
-  if (scheduledNativeUpdatePrompts.has(candidateKey)) {
+  if (nativeUpdatePromptScheduled) {
     return;
   }
-  scheduledNativeUpdatePrompts.add(candidateKey);
+  nativeUpdatePromptScheduled = true;
   setTimeout(async () => {
     try {
       const normalWindows = await chrome.windows.getAll({ windowTypes: ['normal'] });
       if (!normalWindows.length) {
         return;
       }
-      const stored = await chrome.storage.local.get([
-        NATIVE_UPDATE_PROMPTS_KEY,
-        INITIAL_INSTALL_PENDING_KEY,
+      const [localStored, sessionStored] = await Promise.all([
+        chrome.storage.local.get(INITIAL_INSTALL_PENDING_KEY),
+        chrome.storage.session.get(NATIVE_UPDATE_PROMPT_SESSION_KEY),
       ]);
-      const shownKeys = Array.isArray(stored[NATIVE_UPDATE_PROMPTS_KEY])
-        ? stored[NATIVE_UPDATE_PROMPTS_KEY]
-        : [];
       const installPending = initialInstall
-        || stored[INITIAL_INSTALL_PENDING_KEY] === extensionVersion;
+        || localStored[INITIAL_INSTALL_PENDING_KEY] === extensionVersion;
       const decision = nativeUpdatePromptDecision({
         nativeVersion,
         extensionVersion,
-        shownKeys,
+        shownThisSession: sessionStored[NATIVE_UPDATE_PROMPT_SESSION_KEY] === true,
         initialInstall: installPending,
       });
       if (installPending) {
-        // Suppress only the version pair observed after installation. A later change on either
-        // side produces a new key and may remind normally.
-        await chrome.storage.local.set({
-          [NATIVE_UPDATE_PROMPTS_KEY]: [...new Set([...shownKeys, decision.key])],
-        });
-        await chrome.storage.local.remove(INITIAL_INSTALL_PENDING_KEY);
+        // Do not interrupt the installation session. The session flag disappears after Chrome
+        // fully exits, so an old module can remind on the next browser run.
+        await Promise.all([
+          chrome.storage.session.set({ [NATIVE_UPDATE_PROMPT_SESSION_KEY]: true }),
+          chrome.storage.local.remove(INITIAL_INSTALL_PENDING_KEY),
+        ]);
         initialInstall = false;
         return;
       }
       if (!decision.shouldOpen) {
         return;
       }
-      // Persist before opening so a worker/browser restart cannot open this pair twice.
-      await chrome.storage.local.set({
-        [NATIVE_UPDATE_PROMPTS_KEY]: [...new Set([...shownKeys, decision.key])],
-      });
+      // Persist in session storage before opening: worker restarts and reconnects stay quiet,
+      // while a full Chrome restart permits one new reminder.
+      await chrome.storage.session.set({ [NATIVE_UPDATE_PROMPT_SESSION_KEY]: true });
       await openNativeUpdateSettings(normalWindows);
       record('nativeUpdatePromptOpened', { key: decision.key });
     } catch (error) {
       record('nativeUpdatePromptFailed', { error: String(error) });
     } finally {
-      scheduledNativeUpdatePrompts.delete(candidateKey);
+      nativeUpdatePromptScheduled = false;
     }
   }, NATIVE_UPDATE_DELAY_MS);
 }
@@ -1216,6 +1212,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
+  // Version-pair reminders before 0.5.0 were remembered permanently; they are obsolete now.
+  void chrome.storage.local.remove(LEGACY_NATIVE_UPDATE_PROMPTS_KEY);
   if (details.reason === 'install') {
     initialInstall = true;
     void chrome.storage.local.set({
