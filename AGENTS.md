@@ -52,7 +52,7 @@ uv run python tools/ci/check_repo.py
 uv run python tools/ci/package.py --dll artifacts/native/version.dll --out dist
 
 # 端到端（需沙盒 Chrome 已运行）
-uv run --with websocket-client python tools/test/e2e.py tree|drop|drag-out|tree-visual
+uv run --with websocket-client python tools/test/e2e.py tree|drop|drag-out|boundary-snap|tree-visual
 
 # 直接驱动原生端点（不经扩展）/ 查看布局快照
 uv run --with websocket-client python tools/dev/nativecheck.py --layout
@@ -127,7 +127,7 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
 - **扩展连接**（`native-link.js`）：只连桥；桥未注册（`missing`）、浏览器里没有模块（`module-not-loaded`）或其它失败时退避重试（最长 30 秒）。当前传输和桥的状态会出现在设置页“关于与诊断”和调试信息里。
 - **来源限制**：`config.ini` 的 `extensions` 可限定扩展 ID，两个传输都适用；为空时放行任意扩展（桥本身已受 `allowed_origins` 限制）。
 - **握手**：扩展发 `hello {protocol, extVersion}`；DLL 回 `hello {protocolMin, protocolMax, nativeVersion, features, offsets {status, schema, chromeVersion}, safeMode {active, crashes, limit}}`。状态变化时（偏移量到位、功能启用）DLL 主动推送同样结构的 `status`。
-- **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount/treeTab、外观配置），DLL 只负责照着画、不保存树；`safeMode.reset`（用户在设置页点“重新启用”）。DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragOut`/`dragEnd`。`dragOut` 带屏幕坐标，扩展新建窗口并按前序一次迁移整棵子树。
+- **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount/treeTab、外观配置），DLL 只负责照着画、不保存树；`safeMode.reset`（用户在设置页点“重新启用”）。DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragOut`/`dragEnd`。`dragOut` 带相对浏览器窗口的 DIP 坐标，扩展新建窗口并按前序一次迁移整棵子树。
 - **诊断**：`debug.report`（版本、构建、PID、传输、偏移量来源、安全模式、config、计数器、`native.log` 末尾 120 行；协议不兼容时也允许）、`debug.layout`（布局快照，测试用）。
 
 ## 安全模式（崩溃保护）
@@ -236,10 +236,12 @@ git sparse-checkout set --no-cone <目录...>
 20. **CDP `Extensions.loadUnpacked` 加载的扩展不会跨重启保留**：不经 `dev.ps1` 直接重启沙盒（比如测安装脚本后），浏览器里根本没有扩展，看起来像“连不上”。这种测试要在启动后再加载一次扩展。
 21. **绘制回调里的“变化检测”不能用全局单值**：`TabView::active_` 来自 `IsTabInForeground`，每个窗口各有一个、分屏时同一窗口有两个。0.2.0 用一个全局“上次激活的标签”判断变化，两个激活标签交替绘制时它每帧都在变，每次变化又刷新所有标签栏 → 布局风暴（约 1500 次/秒），表现为标签栏抖动、浏览器卡死。状态要按标签（或按容器）记录。另外沙盒窗口被完全遮挡时 Chrome 不绘制，这类问题测不出来：测绘制相关的循环前先让窗口可见（`document.visibilityState`），再用 `debug.report` 的 `stats.layoutCalls` 看空闲时的调用速率是否归零。
 22. **原生端看不到顺序变化**：`StateStore::ReplaceAll` 只比较每个标签的 depth/hidden 等显示状态，不比较顺序。扩展与 Chrome（或其它扩展）来回 `tabs.move` 时，`native.log` 里一条 `state update` 都没有，但 Chrome 在不停移动、动画，标签栏乱跳。现在 `debug.report` 有 `stats.stateReorders`（只改了顺序的快照数），扩展的调试信息有 `order` 计数。0.3.0 的用户日志里出现过这种无状态变化、持续到强杀浏览器的布局风暴（窗口满 14 个标签后开始，每秒数百次），根因未确认，因此加了风暴检测（见“开发与测试方法”）。
-23. **`tabs.move` 把标签移进分屏中间会直接拆掉分屏**（156 实测）；移进标签组中间同理会改变组成员。固定、成组、分屏的标签都不在树里（`isTreeTab`），没有父也没有子，扩展从不移动它们；树里还不认识的新标签按它在标签栏里的实际位置成为根，而不是追加到末尾（否则从组里打开的标签会被拖出组）。
+23. **`tabs.move` 把标签移进分屏中间会直接拆掉分屏**（156 实测）；移进标签组中间同理会改变组成员。固定、成组、分屏的标签都不在树里（`isTreeTab`），没有父也没有子，扩展从不移动它们；树里还不认识的新标签按它在标签栏里的实际位置成为根，而不是追加到末尾（否则从组里打开的标签会被拖出组）。原生拖动这些非树块时允许 Chrome 自己完成拖拽，松手 300ms 后再把块吸附到最近的顶层子树边界；只移动被劈开的树标签短边，并列时块放在子树后。
 24. **短时突发不等于风暴**：开一个标签时 Chrome 每帧要算几十次布局，加上动画，调用速率会到约 2000 次/秒，持续 0.3–2 秒后归零，这是正常的。风暴检测因此要求连续 5 秒超过 300 次/秒。
 25. **布局调用栈可以跨进程比对**：同一调用路径的栈帧布局固定，`result=` 地址的低 16 位、以及两条路径之间的地址差在不同进程里都一样，可用来在沙盒里认出用户日志里的调用路径。
 26. **PDB key 不要用 pefile 的 `Signature_String` 拼**：新版 pefile 的 `Signature_String` 已经带了 Age，再拼一次就成了 34 位的 key（157 的 `...2E1` 变成 `...2E11`）。符号服务器对它返回 404，看起来和“PDB 还没上线”一模一样，CI 因此空等了好几天。现在 `pdbinfo.py` 与 `resolve.py` 都直接解析 RSDS 原始记录，与 DLL 的 `PdbKeyFromModule` 一致；offsets 工作流在安装包发布 48 小时后仍拿不到 PDB 时会开 issue。遇到 404，先拿 `native.log` 里 `downloading offsets for key` 的 key 核对。
+27. **`GetCursorPos` 是物理像素，`chrome.windows.create` 的 bounds 是 DIP**：高 DPI 下直接传屏幕坐标会让 Chrome 报 `Bounds must be at least 50% within visible screen space`，拖出消息看似发送成功却没有窗口。原生端要用捕获窗口的 `GetDpiForWindow` 把坐标转换成窗口相对 DIP；扩展结合源窗口 DIP bounds 后再夹取，并在带 bounds 的 `windows.create` 失败时去掉 `left/top` 重试。
+28. **校验过期 host view 时，连读 vtable 本身也必须在 SEH 里**：多窗口关闭或迁移标签后，记录的 strip host 可能已经释放；在 `RefreshViewsOnUiThread` 里先裸读 `*view` 再进入带 `__try` 的刷新函数仍会让浏览器崩溃。把单次指针读取拆进不需要 C++ 展开的 SEH helper，读取失败就跳过该 host。
 
 ## 符号与偏移核对经验
 
@@ -291,6 +293,6 @@ git sparse-checkout set --no-cone <目录...>
 - 顺序 = 树的前序遍历，不单独存顺序，所以永远自洽、不需要 `normalize()` 之类的修复。
 - 结构操作只有两种，都由扩展执行：改父（`attachAsLastChild`）、换兄弟位置（`insertSibling`，父节点不变）。
 - **不要**让 Chrome 自由重排后再从落点索引反推父节点——这是旧方案树错乱的来源。`tabs.onMoved` 只重算兄弟顺序（`adoptOrder`）、父关系不动，再用 `tabs.move` 把前序顺序收敛回来。
-- **收敛（`applyOrder`）**：每个窗口同时只跑一轮，期间的新请求合并成再跑一轮；每步重新读标签栏，只把“没紧跟在前序前驱后面”的树内标签挪到前驱后面，从不移动固定/成组/分屏标签。Chrome 没把标签放到要求的位置就停下（不和 Chrome 较劲）；10 秒内超过 150 次移动说明有别的东西在反向移动，暂停该窗口 30 秒。
+- **收敛（`applyOrder`）**：每个窗口同时只跑一轮，期间的新请求合并成再跑一轮；树标签保持前序，单棵顶层子树内部必须连续，非树块可以留在不同顶层子树之间。扩展从不移动固定/成组/分屏标签。原生拖拽把非树块落进子树中间时，`planTopLevelBoundarySnaps` 纯函数比较块两侧属于该子树的标签数，只把较短侧的树标签跨过块（并列时块吸附到子树后）；`onMoved` 静默 300ms 后执行。Chrome 在原生拖拽尚未结束时会让 `tabs.move` 报 `Tabs cannot be edited right now`，对此最多退避重试 10 秒，其他拒绝仍立即停止。10 秒内超过 150 次移动说明有别的东西在反向移动，暂停该窗口 30 秒。
 - **被拖的是哪个标签**由 `TabView::OnMousePressed` 记录，随 `dragBegin` / `dropOnto` / `dragOut` 一起传递；不要用“当前激活标签”去猜。原生侧保留 Chrome 的按下选择逻辑，但在 `InitializeDrag` 处阻止树标签进入原生拖拽会话，越过系统拖拽阈值后的移动、落点与松开全部自行处理。
-- 拖拽期间临时折叠被拖的展开父标签，`dragEnd` 后恢复；`dropOnto` 拒绝把父节点放进自己的后代。指针在标签栏外松开时，`dragOut` 用 `chrome.windows.create({tabId})` 创建窗口，再把其余后代按前序批量移入；attached/detached 事件在这段事务里不得提前同步和扁平化子树。
+- 拖拽期间临时折叠被拖的展开父标签，`dragEnd` 后恢复；`dropOnto` 拒绝把父节点放进自己的后代。指针在标签栏外松开时，`dragOut` 发送相对源浏览器窗口的 DIP 坐标，扩展用 `chrome.windows.create({tabId, left, top})` 创建窗口，再把其余后代按前序批量移入；坐标越界时夹取，带 bounds 创建仍失败则去掉 `left/top` 重试。attached/detached 事件在这段事务里不得提前同步和扁平化子树。
