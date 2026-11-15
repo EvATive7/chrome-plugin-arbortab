@@ -42,7 +42,11 @@ struct StripSnapshot {
 
 // Snapshot of `host_view`, or nullptr when that container was never laid out vertically.
 const StripSnapshot* FindStripSnapshot(const void* host_view);
-// Most recently updated snapshot (fallback when the caller cannot name its container).
+// Snapshot containing `tab_view`, or nullptr when the view is not in a rewritten vertical strip.
+// When requested, `row_out` points at that view's row inside the returned snapshot.
+const StripSnapshot* FindStripSnapshotForTabView(const void* tab_view,
+                                                 const StripRow** row_out = nullptr);
+// Most recently updated snapshot (diagnostic fallback only).
 const StripSnapshot* LatestStripSnapshot();
 
 // Rows narrower than this are the icon-only tabs of the collapsed strip (about 40 DIP wide):

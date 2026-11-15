@@ -452,7 +452,6 @@ void RewriteLayout(void* layout_ptr, const void* layout_object) {
     RequestAnimationFrame();
   }
   HoldHostSizeAnimation(host_view, animating);
-  RefreshDragGhost(host_view);
 
   if (want_snapshot) {
     std::lock_guard<std::mutex> lock(g_snapshot_mutex);
@@ -767,6 +766,29 @@ const StripSnapshot* FindStripSnapshot(const void* host_view) {
   for (const StripSnapshot& snapshot : g_snapshots) {
     if (snapshot.host_view == host_view && snapshot.updated_at) {
       return &snapshot;
+    }
+  }
+  return nullptr;
+}
+
+const StripSnapshot* FindStripSnapshotForTabView(const void* tab_view, const StripRow** row_out) {
+  if (row_out) {
+    *row_out = nullptr;
+  }
+  if (!tab_view) {
+    return nullptr;
+  }
+  for (const StripSnapshot& snapshot : g_snapshots) {
+    if (!snapshot.updated_at) {
+      continue;
+    }
+    for (size_t index = 0; index < snapshot.count; ++index) {
+      if (snapshot.rows[index].view == tab_view) {
+        if (row_out) {
+          *row_out = &snapshot.rows[index];
+        }
+        return &snapshot;
+      }
     }
   }
   return nullptr;

@@ -1,5 +1,5 @@
-// F4/F5/F6: drag a tab onto another tab to re-parent it, or onto an edge to reorder it among
-// its siblings. The native strip reorder is suppressed while dragging.
+// F4/F5/F6: ArborTab owns left-button drag in its rewritten tree tab strips. Chrome still
+// handles the press (selection/activation), but its native tab-drag initialization is suppressed.
 #pragma once
 
 #include <windows.h>
@@ -9,25 +9,28 @@
 namespace arbortab {
 
 struct DragFeature {
-  void* handle_original = nullptr;
-  uint32_t handle_rva = 0;
-  void* end_original = nullptr;
-  uint32_t end_rva = 0;
+  void* initialize_original = nullptr;
+  uint32_t initialize_rva = 0;
+  void* dragged_original = nullptr;
+  uint32_t dragged_rva = 0;
+  void* released_original = nullptr;
+  uint32_t released_rva = 0;
+  void* capture_lost_original = nullptr;
+  uint32_t capture_lost_rva = 0;
   bool installed = false;
 };
 
 bool InstallDragFeature(HMODULE chrome_dll, const Offsets& offsets, DragFeature& feature);
 
-// Called from TabView::OnMousePressed: the tab a drag would start from.
-void NoteTabPressed(int tab_id);
+// Called around TabView::OnMousePressed. Preparation is deliberately separate so the original
+// press can run while InitializeDrag is suppressed, preserving Chrome's click/selection behavior.
+void PrepareOwnDragPress(void* tab_view, const void* event);
+void FinishOwnDragPress(bool handled);
 
-// Called from the paint hook: highlights the current drop target (size in DIP).
+// Called from the paint hooks: highlights the current drop target (size in DIP).
 void PaintDropTarget(void* tab_view, void* canvas, int32_t width, int32_t height);
 // Called from the container paint hook: the "drop at the end" line below the last row.
 void PaintDropEnd(const void* host_view, void* canvas);
-
-// Called after each layout pass of a tab container: keeps the dragged tab translucent.
-void RefreshDragGhost(const void* host_view);
 
 // Diagnostics.
 int CurrentDropTargetTabId();

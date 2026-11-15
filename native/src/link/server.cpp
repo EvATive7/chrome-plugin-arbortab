@@ -179,6 +179,7 @@ void HandleMessageUnsafe(LinkClient& client, const std::string& text) {
           state.hidden = node.value("hidden", false);
           state.has_children = node.value("hasChildren", false);
           state.collapsed = node.value("collapsed", false);
+          state.tree_tab = node.value("treeTab", false);
           state.hidden_count = node.value("hiddenCount", 0);
           const std::string title = node.value("title", std::string());
           strncpy_s(state.title.data(), state.title.size(), title.c_str(), _TRUNCATE);

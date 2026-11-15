@@ -43,7 +43,10 @@ FeatureState InstallFeatureHooks(HMODULE chrome_dll, const Offsets& offsets) {
   features.layout = InstallLayoutFeature(chrome_dll, offsets, g_layout);
   features.twisty = InstallMouseFeature(chrome_dll, offsets, g_mouse);
   features.paint = InstallPaintFeature(chrome_dll, offsets, g_paint);
-  features.drag = InstallDragFeature(chrome_dll, offsets, g_drag);
+  // Owned drag needs both the rewritten-strip snapshots and the press hook that brackets
+  // Chrome's native selection path. If either prerequisite is absent, leave native drag intact.
+  features.drag = features.layout && features.twisty &&
+                  InstallDragFeature(chrome_dll, offsets, g_drag);
   // Cosmetic only: the tree works the same without the decorations.
   if (InstallDecorFeature(chrome_dll, offsets, g_decor)) {
     ARB_INFO("decorations: guides=%s badge=%s chevron=%s", g_decor.guides ? "on" : "off",

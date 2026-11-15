@@ -36,6 +36,8 @@ let dragActive = false;
 let dragTemporarilyCollapsed = null;
 /** Window of the current drag: its strip order is re-asserted when the drag ends. */
 let dragWindowId = null;
+/** Cross-window tab events belonging to an owned drag-out; handled as one tree transaction. */
+let dragOutTransfer = null;
 let stateVersion = 0;
 let lastSentVersion = -1;
 let sendTimer = null;
@@ -218,7 +220,11 @@ async function sendState() {
     for (const tabId of display.windowTabs) {
       windowTabs.push(tabId);
       const tab = byIndex.find((candidate) => candidate.id === tabId);
-      allTabs[tabId] = { ...display.tabs[tabId], title: tab?.title || '' };
+      allTabs[tabId] = {
+        ...display.tabs[tabId],
+        title: tab?.title || '',
+        treeTab: isTreeTab(tab),
+      };
     }
   }
   link.send({
@@ -465,7 +471,15 @@ async function onActivated(activeInfo) {
 }
 
 async function onAttached(tabId, attachInfo) {
+  // Capture before the first await: Chrome may resolve windows.create/tabs.move and finish the
+  // transaction while this listener is suspended in ensureInit().
+  const transfer = dragOutTransfer;
   await ensureInit();
+  if (transfer && transfer.tabIds.has(tabId)
+    && (transfer.targetWindowId == null || transfer.targetWindowId === attachInfo.newWindowId)) {
+    transfer.targetWindowId = attachInfo.newWindowId;
+    return;
+  }
   const source = windows.get(attachInfo.fromWindowId) || null;
   const target = stateFor(attachInfo.newWindowId);
   // The whole subtree travels: its internal relations move verbatim.
@@ -481,7 +495,13 @@ async function onAttached(tabId, attachInfo) {
 }
 
 async function onDetached(tabId, detachInfo) {
+  const transfer = dragOutTransfer;
   await ensureInit();
+  if (transfer
+    && transfer.sourceWindowId === detachInfo.oldWindowId
+    && transfer.tabIds.has(tabId)) {
+    return;
+  }
   const state = stateFor(detachInfo.oldWindowId);
   if (!state.nodes.has(tabId)) {
     return;
@@ -515,8 +535,8 @@ async function onUpdated(tabId, changeInfo, tab) {
 // Native messages
 // ---------------------------------------------------------------------------------------
 
-// Native events are handled strictly in order: dragBegin, dropOnto and dragEnd of one drag
-// all touch the same state and must not interleave.
+// Native events are handled strictly in order: dragBegin, dropOnto/dragOut and dragEnd of one
+// drag all touch the same state and must not interleave.
 let nativeQueue = Promise.resolve();
 
 function handleNativeMessage(message) {
@@ -543,6 +563,9 @@ async function dispatchNativeMessage(message) {
       break;
     case 'dropOnto':
       await dropOnto(message.targetTabId, message.zone, message.draggedTabId);
+      break;
+    case 'dragOut':
+      await dragOut(message.draggedTabId, message.screenX, message.screenY);
       break;
     default:
       break;
@@ -614,6 +637,67 @@ async function toggleCollapsed(tabId) {
   tree.setCollapsed(state, tabId, !tree.isCollapsed(state, tabId));
   bumpState();
   await saveSession();
+}
+
+async function dragOut(draggedTabId, screenX, screenY) {
+  const dragged = await draggedTab(draggedTabId);
+  if (!dragged || !isTreeTab(dragged)) {
+    return;
+  }
+  const sourceWindowId = dragged.windowId;
+  const source = windows.get(sourceWindowId);
+  if (!source) {
+    return;
+  }
+  const subtree = tree.subtreeIds(source, dragged.id);
+  if (!subtree.length) {
+    return;
+  }
+  dragOutTransfer = {
+    sourceWindowId,
+    targetWindowId: null,
+    tabIds: new Set(subtree),
+  };
+  try {
+    const createData = { tabId: dragged.id };
+    if (Number.isFinite(screenX) && Number.isFinite(screenY)) {
+      createData.left = Math.round(screenX - 120);
+      createData.top = Math.round(screenY - 20);
+    }
+    const targetWindow = await chrome.windows.create(createData);
+    if (targetWindow?.id == null) {
+      throw new Error('Chrome did not return the new window id');
+    }
+    dragOutTransfer.targetWindowId = targetWindow.id;
+    const descendants = subtree.slice(1);
+    if (descendants.length) {
+      // One tabs.move call preserves pre-order and keeps the transfer all-or-nothing in Chrome.
+      await chrome.tabs.move(descendants, { windowId: targetWindow.id, index: -1 });
+    }
+
+    // Transfer the model only after all physical tabs arrived. onAttached/onDetached ignore this
+    // transaction, so no intermediate sync can flatten the subtree.
+    const moved = tree.detachSubtree(source, dragged.id);
+    const target = stateFor(targetWindow.id);
+    tree.attachSubtreeAsRoot(target, dragged.id, moved.nodes);
+    await syncWindow(targetWindow.id);
+    if (windows.has(sourceWindowId)) {
+      await syncWindow(sourceWindowId).catch(() => windows.delete(sourceWindowId));
+    }
+    await applyOrder(targetWindow.id);
+    bumpState();
+    await saveSession();
+    record('dragOut', { tabId: dragged.id, tabs: subtree.length });
+  } finally {
+    // Chrome may dispatch onAttached/onDetached after the API promise resolves. Keep the id set
+    // briefly so those late events are still recognized as part of this transaction.
+    const completedTransfer = dragOutTransfer;
+    setTimeout(() => {
+      if (dragOutTransfer === completedTransfer) {
+        dragOutTransfer = null;
+      }
+    }, 5000);
+  }
 }
 
 async function dropOnto(targetTabId, zone = 'nest', draggedTabId = null) {
@@ -934,6 +1018,7 @@ globalThis.arbortab = {
     order: { ...orderStats } }),
   // Sandbox test hook: exercises the same path as a native dropOnto event.
   __testDrop: (targetTabId, zone, draggedTabId) => dropOnto(targetTabId, zone, draggedTabId),
+  __testDragOut: (draggedTabId, screenX, screenY) => dragOut(draggedTabId, screenX, screenY),
   __testToggle: (tabId) => toggleCollapsed(tabId),
   __testDragBegin: onDragBegin,
   __testDragEnd: onDragEnd,

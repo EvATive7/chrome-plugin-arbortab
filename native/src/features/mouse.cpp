@@ -19,7 +19,7 @@ namespace {
 
 // ui::EventFlags (ui/events/event_constants.h)
 constexpr uint32_t kEventModifierMask = 0x1E;  // shift | control | alt | command
-constexpr uint32_t kLeftMouseButton = 0x100;
+constexpr uint32_t kLeftMouseButton = 0x800;
 
 // ui::LocatedEvent::location_ is a gfx::PointF at +0xb0 (fields come from the offsets table).
 struct Geometry {
@@ -111,20 +111,8 @@ int TwistyTargetTabId(void* self, const void* event) {
   }
 }
 
-int SafeTabIdOf(void* view) {
-  __try {
-    return GlobalApi().TabIdOf(view);
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return 0;
-  }
-}
-
 bool HookOnMousePressed(void* self, const void* event) {
   const int tab_id = TwistyTargetTabId(self, event);
-  if (!tab_id) {
-    // A drag can only start from a press that reaches Chrome: remember its tab.
-    NoteTabPressed(SafeTabIdOf(self));
-  }
   if (tab_id) {
     InterlockedIncrement(&g_twisty_clicks);
     ARB_DEBUG("twisty click on tab %d", tab_id);
@@ -132,7 +120,10 @@ bool HookOnMousePressed(void* self, const void* event) {
     // Swallow the click: the tab must not activate and no drag may start.
     return true;
   }
-  return reinterpret_cast<OnMousePressedFn>(g_mouse.original)(self, event);
+  PrepareOwnDragPress(self, event);
+  const bool handled = reinterpret_cast<OnMousePressedFn>(g_mouse.original)(self, event);
+  FinishOwnDragPress(handled);
+  return handled;
 }
 
 // void TabView::OnPaint(gfx::Canvas*)

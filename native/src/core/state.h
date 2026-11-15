@@ -16,6 +16,7 @@ struct TabDisplayState {
   bool hidden = false;
   bool has_children = false;
   bool collapsed = false;
+  bool tree_tab = false;  // extension-owned tree scope (not pinned, grouped, or split)
   int hidden_count = 0;
   // Fixed storage keeps this state trivially destructible: it is copied inside guarded UI
   // hooks where MSVC does not allow objects that require C++ unwinding.

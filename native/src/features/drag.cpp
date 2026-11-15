@@ -1,7 +1,9 @@
 #include "features/drag.h"
 
+#include <algorithm>
 #include <atomic>
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -19,25 +21,122 @@
 namespace arbortab {
 namespace {
 
-struct DragOffsets {
-  uint32_t container_host_view = 0;  // DraggedTabsContainer::host_view_
+struct DragGeometry {
+  uint32_t event_flags = 0;
+  uint32_t event_location = 0;
 };
 
 DragFeature g_feature;
-DragOffsets g_offsets;
-
-// Everything below is touched from the UI thread only (the hooks run there), except the
-// atomics used by diagnostics.
+DragGeometry g_geometry;
+std::atomic<bool> g_feature_ready{false};
 std::atomic<bool> g_dragging{false};
-std::atomic<int> g_pressed_tab{0};  // last tab the mouse went down on: the drag source
+
+// Hook state is UI-thread-only. The atomics above are also read by diagnostics/painting.
+bool g_press_owned = false;
+bool g_suppress_initialize = false;
+void* g_pressed_view = nullptr;
+void* g_pressed_host = nullptr;
+int g_pressed_tab = 0;
+float g_press_x = 0.f;
+float g_press_y = 0.f;
 int g_drag_source = 0;
+bool g_drag_outside = false;
 void* g_drop_target_view = nullptr;
 int g_drop_target_tab = 0;
 int g_drop_zone = 0;
 void* g_drop_host = nullptr;
-ULONGLONG g_drop_changed_at = 0;  // the indicator fades in from here
+ULONGLONG g_drop_changed_at = 0;
 volatile LONG g_drag_begins = 0;
 volatile LONG g_drops = 0;
+volatile LONG g_drag_outs = 0;
+
+// ui::EventFlags (ui/events/event_constants.h). Modifiers remain allowed; only extra mouse
+// buttons disqualify a press, matching MouseEvent::IsOnlyLeftMouseButton().
+constexpr uint32_t kSynthesizedEvent = 0x0001;
+constexpr uint32_t kLeftMouseButton = 0x0800;
+constexpr uint32_t kMouseButtonMask = 0xF800;
+constexpr uint32_t kFromTouch = 0x80000;
+
+constexpr int kZoneNone = 0;
+constexpr int kZoneNest = 1;
+constexpr int kZoneBefore = 2;
+constexpr int kZoneAfter = 3;
+constexpr int kZoneEnd = 4;
+
+const char* ZoneName(int zone) {
+  switch (zone) {
+    case kZoneNest:
+      return "nest";
+    case kZoneBefore:
+      return "before";
+    case kZoneAfter:
+      return "after";
+    case kZoneEnd:
+      return "end";
+    default:
+      return "none";
+  }
+}
+
+int32_t ReadInt(const uint8_t* address) {
+  int32_t value = 0;
+  memcpy(&value, address, sizeof(value));
+  return value;
+}
+
+float ReadFloat(const uint8_t* address) {
+  float value = 0.f;
+  memcpy(&value, address, sizeof(value));
+  return value;
+}
+
+bool IsTreeTab(int tab_id) {
+  TabDisplayState state;
+  return tab_id != 0 && GlobalState().Find(tab_id, state) && state.tree_tab;
+}
+
+struct EventPoint {
+  uint32_t flags = 0;
+  float x = 0.f;
+  float y = 0.f;
+  bool valid = false;
+};
+
+EventPoint ReadEventPoint(const void* event) {
+  EventPoint point;
+  __try {
+    const auto* bytes = static_cast<const uint8_t*>(event);
+    point.flags = *reinterpret_cast<const uint32_t*>(bytes + g_geometry.event_flags);
+    point.x = ReadFloat(bytes + g_geometry.event_location);
+    point.y = ReadFloat(bytes + g_geometry.event_location + sizeof(float));
+    point.valid = true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+  }
+  return point;
+}
+
+void Repaint(void* view) {
+  if (view) {
+    GlobalApi().SchedulePaint(view);
+  }
+}
+
+// The dragged tab is shown translucent so rows underneath stay readable. It is applied exactly
+// once at drag begin; ArborTab no longer retries from layout passes.
+struct GhostApi {
+  using SetPaintToLayerFn = void (*)(void* view, int layer_type);
+  using DestroyLayerFn = void (*)(void* view);
+  using SetOpacityFn = void (*)(void* layer, float opacity);
+  SetPaintToLayerFn set_paint_to_layer = nullptr;
+  DestroyLayerFn destroy_layer = nullptr;
+  SetOpacityFn set_opacity = nullptr;
+  uint32_t layer_offset = 0;
+};
+GhostApi g_ghost;
+constexpr int kLayerTextured = 1;
+constexpr float kGhostOpacity = 0.4f;
+void* g_ghost_view = nullptr;
+bool g_ghost_owns_layer = false;
 
 template <typename T>
 T ReadPointer(const uint8_t* base, uint32_t offset) {
@@ -46,67 +145,68 @@ T ReadPointer(const uint8_t* base, uint32_t offset) {
   return value;
 }
 
-// The dragged tab is shown translucent so the rows underneath stay readable. Views paint
-// children separately, so only the tab's compositing layer can fade it as a whole.
-struct GhostApi {
-  using SetPaintToLayerFn = void (*)(void* view, int layer_type);
-  using DestroyLayerFn = void (*)(void* view);
-  using SetOpacityFn = void (*)(void* layer, float opacity);
-  SetPaintToLayerFn set_paint_to_layer = nullptr;
-  DestroyLayerFn destroy_layer = nullptr;
-  SetOpacityFn set_opacity = nullptr;
-  uint32_t layer_offset = 0;  // views::View -> ui::LayerOwner::layer_
-};
-GhostApi g_ghost;
-constexpr int kLayerTextured = 1;  // ui::LayerType::LAYER_TEXTURED
-constexpr float kGhostOpacity = 0.4f;
-void* g_ghost_view = nullptr;
-bool g_ghost_owns_layer = false;  // the layer was created for the drag and is removed after
-bool g_ghost_retry_needed = false;
-void* g_ghost_host = nullptr;  // container of the dragged tab
-
-int32_t ReadInt(const uint8_t* address) {
-  int32_t value = 0;
-  memcpy(&value, address, sizeof(value));
-  return value;
+void* LayerOf(void* view) {
+  return ReadPointer<void*>(static_cast<uint8_t*>(view), g_ghost.layer_offset);
 }
 
-constexpr int kZoneNone = 0;
-constexpr int kZoneNest = 1;
-constexpr int kZoneBefore = 2;
-constexpr int kZoneAfter = 3;
-constexpr int kZoneEnd = 4;  // below the last tab: becomes the last top-level tab
+void GhostApply(void* view) {
+  if (!view || !g_ghost.set_opacity || !g_ghost.layer_offset) {
+    return;
+  }
+  __try {
+    g_ghost_view = view;
+    g_ghost_owns_layer = false;
+    void* layer = LayerOf(view);
+    if (!layer && g_ghost.set_paint_to_layer && g_ghost.destroy_layer) {
+      g_ghost.set_paint_to_layer(view, kLayerTextured);
+      layer = LayerOf(view);
+      g_ghost_owns_layer = layer != nullptr;
+    }
+    if (layer) {
+      g_ghost.set_opacity(layer, kGhostOpacity);
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    g_ghost_view = nullptr;
+    g_ghost_owns_layer = false;
+  }
+}
 
-const char* ZoneName(int zone) {
-  switch (zone) {
-    case kZoneNest: return "nest";
-    case kZoneBefore: return "before";
-    case kZoneAfter: return "after";
-    case kZoneEnd: return "end";
-    default: return "none";
+void GhostEnd() {
+  void* view = g_ghost_view;
+  const bool owns = g_ghost_owns_layer;
+  g_ghost_view = nullptr;
+  g_ghost_owns_layer = false;
+  if (!view || !GlobalApi().IsTabView(view)) {
+    return;
+  }
+  __try {
+    if (owns && g_ghost.destroy_layer) {
+      g_ghost.destroy_layer(view);
+    } else if (void* layer = LayerOf(view)) {
+      g_ghost.set_opacity(layer, 1.f);
+    }
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
   }
 }
 
 struct DropHit {
-  void* view;
-  int tab_id;
-  int zone;
+  void* view = nullptr;
+  int tab_id = 0;
+  int zone = kZoneNone;
 };
 
-// Classifies the pointer against the rows of the last layout pass. Those rows are exactly what
-// is on screen (indent and hidden tabs already applied), unlike views::View::children_, and
-// they live in the same coordinate space as the drag point (the container's).
-//
-// Each row owns the band from its top to the next row's top: the top quarter inserts before
-// it, the bottom quarter after it (same parent), the middle half nests under it.
 DropHit FindDropTarget(const StripSnapshot& strip, int32_t pointer_y, int source_tab) {
-  DropHit hit{nullptr, 0, kZoneNone};
   if (strip.count == 0) {
-    return hit;
+    return {};
   }
   if (pointer_y >= strip.content_bottom) {
-    const StripRow& last = strip.rows[strip.count - 1];
-    return DropHit{last.view, last.tab_id, kZoneEnd};
+    for (size_t index = strip.count; index > 0; --index) {
+      const StripRow& row = strip.rows[index - 1];
+      if (row.tab_id != source_tab && IsTreeTab(row.tab_id)) {
+        return DropHit{row.view, row.tab_id, kZoneEnd};
+      }
+    }
+    return {};
   }
   for (size_t index = 0; index < strip.count; ++index) {
     const StripRow& row = strip.rows[index];
@@ -116,8 +216,8 @@ DropHit FindDropTarget(const StripSnapshot& strip, int32_t pointer_y, int source
     if (pointer_y < top || pointer_y >= bottom) {
       continue;
     }
-    if (row.tab_id == source_tab || row.height <= 0) {
-      return hit;  // hovering the dragged tab itself: no drop
+    if (row.tab_id == source_tab || row.height <= 0 || !IsTreeTab(row.tab_id)) {
+      return {};
     }
     const int32_t offset = pointer_y - row.y;
     const int zone = offset < row.height / 4
@@ -125,226 +225,229 @@ DropHit FindDropTarget(const StripSnapshot& strip, int32_t pointer_y, int source
                          : (offset >= row.height - row.height / 4 ? kZoneAfter : kZoneNest);
     return DropHit{row.view, row.tab_id, zone};
   }
-  return hit;
+  return {};
 }
 
-// gfx::Point is two consecutive ints, already in the container's coordinates.
-int32_t SafeReadPointerY(const void* point) {
-  __try {
-    return ReadInt(static_cast<const uint8_t*>(point) + sizeof(int32_t));
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return INT32_MIN;
-  }
-}
-
-void* SafeReadHostView(void* container) {
-  __try {
-    return ReadPointer<void*>(static_cast<uint8_t*>(container), g_offsets.container_host_view);
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    return nullptr;
-  }
-}
-
-void* LayerOf(void* view) {
-  return ReadPointer<void*>(static_cast<uint8_t*>(view), g_ghost.layer_offset);
-}
-
-void* ViewOfTab(const StripSnapshot& strip, int tab_id) {
-  for (size_t index = 0; index < strip.count; ++index) {
-    if (strip.rows[index].tab_id == tab_id) {
-      return strip.rows[index].view;
-    }
-  }
-  return nullptr;
-}
-
-// (Re)applies the translucency. Chrome's animating tab layout gives views temporary layers
-// and removes or resets them when its animation ends, which happens right after the drag
-// starts when the dragged parent gets collapsed; so this runs again on every drag move and
-// layout pass instead of once.
-void GhostApply(void* view, bool may_create) {
-  if (!view || !g_ghost.set_opacity || !g_ghost.layer_offset) {
+void SetDropHit(const StripSnapshot& strip, const DropHit& hit) {
+  if (hit.view == g_drop_target_view && hit.zone == g_drop_zone &&
+      strip.host_view == g_drop_host) {
     return;
   }
-  __try {
-    if (view != g_ghost_view) {
-      g_ghost_view = view;
-      g_ghost_owns_layer = false;
-    }
-    void* layer = LayerOf(view);
-    if (!layer && !may_create) {
-      g_ghost_retry_needed = true;
-      return;
-    }
-    if (!layer && g_ghost.set_paint_to_layer && g_ghost.destroy_layer) {
-      g_ghost.set_paint_to_layer(view, kLayerTextured);
-      layer = LayerOf(view);
-      g_ghost_owns_layer = layer != nullptr;
-    }
-    if (layer) {
-      g_ghost.set_opacity(layer, kGhostOpacity);  // no-op when already set
-    }
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-    g_ghost_view = nullptr;
+  void* previous = g_drop_target_view;
+  void* previous_host = g_drop_host;
+  const bool end_changed = (g_drop_zone == kZoneEnd) != (hit.zone == kZoneEnd) ||
+                           previous_host != strip.host_view;
+  g_drop_target_view = hit.view;
+  g_drop_target_tab = hit.tab_id;
+  g_drop_zone = hit.zone;
+  g_drop_host = strip.host_view;
+  g_drop_changed_at = GetTickCount64();
+  Repaint(previous);
+  Repaint(hit.view);
+  if (end_changed) {
+    Repaint(previous_host);
+    Repaint(g_drop_host);
   }
+  ARB_DEBUG("drop target: tab %d zone %s", hit.tab_id, ZoneName(hit.zone));
 }
 
-void GhostRetry();
-
-// `may_create` is false inside layout passes: a layer is only created from the drag handler
-// or the next frame tick.
-void GhostRefreshFrom(const StripSnapshot& strip, bool may_create) {
-  if (!g_dragging.load() || !g_drag_source) {
-    return;
-  }
-  g_ghost_retry_needed = false;
-  GhostApply(ViewOfTab(strip, g_drag_source), may_create);
-  if (g_ghost_retry_needed) {
-    RequestFrameCallback(&GhostRetry);
-  }
-}
-
-void GhostRetry() {
-  if (const StripSnapshot* strip = FindStripSnapshot(g_drop_host ? g_drop_host : g_ghost_host)) {
-    GhostRefreshFrom(*strip, /*may_create=*/true);
-  }
-}
-
-void GhostEnd() {
-  void* view = g_ghost_view;
-  const bool owns = g_ghost_owns_layer;
-  g_ghost_view = nullptr;
-  g_ghost_owns_layer = false;
-  // The view may have been destroyed during the drag (closed, or moved to another window);
-  // a freed TabView no longer carries its vtable.
-  if (!view || !GlobalApi().IsTabView(view)) {
-    return;
-  }
-  __try {
-    if (owns) {
-      g_ghost.destroy_layer(view);
-    } else if (void* layer = LayerOf(view)) {
-      g_ghost.set_opacity(layer, 1.f);
-    }
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
-  }
-}
-
-void Repaint(void* view) {
-  if (view) {
-    GlobalApi().SchedulePaint(view);
-  }
-}
-
-// void DraggedTabsContainer::HandleTabDragInContainer(const gfx::Rect&, const gfx::Point&)
-//
-// The original computes a new strip index for the dragged tabs and moves them in the tab
-// model right away: that is the "other tabs make room" reorder. In the tree strip that move is
-// never wanted (the drop decides the tree change and the extension applies it), so the
-// original only runs for strips we do not lay out.
-using HandleDragFn = void (*)(void* self, const void* dragged_bounds, const void* point);
-
-void HookHandleTabDragInContainer(void* self, const void* dragged_bounds, const void* point) {
-  void* host = SafeReadHostView(self);
-  const StripSnapshot* strip = FindStripSnapshot(host);
-  const bool exact = strip != nullptr;
-  if (!strip) {
-    strip = LatestStripSnapshot();
-  }
-  const int32_t pointer_y = SafeReadPointerY(point);
-  if (!strip || pointer_y == INT32_MIN) {
-    reinterpret_cast<HandleDragFn>(g_feature.handle_original)(self, dragged_bounds, point);
-    return;
-  }
-
-  if (!g_dragging.exchange(true)) {
-    g_drag_source = g_pressed_tab.load();
-    InterlockedIncrement(&g_drag_begins);
-    ARB_DEBUG("drag started: source tab %d, host %p (%s snapshot, %zu rows, bottom %d), "
-              "pointer_y %d",
-              g_drag_source, host, exact ? "own" : "latest", strip->count,
-              strip->content_bottom, pointer_y);
-    BroadcastJson("{\"type\":\"dragBegin\",\"draggedTabId\":" + std::to_string(g_drag_source) +
-                  "}");
-  }
-
-  g_ghost_host = strip->host_view;
-  GhostRefreshFrom(*strip, /*may_create=*/true);
-  const DropHit hit = FindDropTarget(*strip, pointer_y, g_drag_source);
-  if (hit.view != g_drop_target_view || hit.zone != g_drop_zone) {
-    void* previous = g_drop_target_view;
-    g_drop_target_view = hit.view;
-    g_drop_target_tab = hit.tab_id;
-    const bool end_changed = (g_drop_zone == kZoneEnd) != (hit.zone == kZoneEnd);
-    g_drop_zone = hit.zone;
-    g_drop_host = strip->host_view;
-    g_drop_changed_at = GetTickCount64();
-    Repaint(previous);
-    Repaint(hit.view);
-    if (end_changed) {
-      Repaint(g_drop_host);  // the end indicator is painted by the container
-    }
-    ARB_DEBUG("drop target: tab %d zone %s (pointer_y %d)", hit.tab_id, ZoneName(hit.zone),
-              pointer_y);
-  }
-  // Swallowed on purpose: no native reorder while dragging inside the tree strip.
-}
-
-// void TabDragHandler[Impl]::EndDrag(EndDragReason reason)
-using EndDragFn = void (*)(void* self, int reason);
-
-void HookEndDrag(void* self, int reason) {
-  const bool was_dragging = g_dragging.exchange(false);
-  const int target = g_drop_target_tab;
-  const int zone = g_drop_zone;
-  const int source = g_drag_source;
-  void* target_view = g_drop_target_view;
+void ClearDropHit() {
+  void* target = g_drop_target_view;
   void* host = g_drop_host;
-  g_drop_target_tab = 0;
   g_drop_target_view = nullptr;
+  g_drop_target_tab = 0;
   g_drop_zone = kZoneNone;
   g_drop_host = nullptr;
-  g_drag_source = 0;
+  Repaint(target);
+  Repaint(host);
+}
 
-  g_ghost_host = nullptr;
-  if (was_dragging) {
-    GhostEnd();
-    const bool cancelled = reason != 0;  // EndDragReason::kComplete == 0
-    if (target && source && !cancelled && zone != kZoneNone) {
-      InterlockedIncrement(&g_drops);
-      ARB_INFO("dropped tab %d onto tab %d (%s)", source, target, ZoneName(zone));
-      BroadcastJson(std::string("{\"type\":\"dropOnto\",\"draggedTabId\":") +
-                    std::to_string(source) + ",\"targetTabId\":" + std::to_string(target) +
-                    ",\"zone\":\"" + ZoneName(zone) + "\"}");
-    } else {
-      ARB_DEBUG("drag ended without a drop (reason %d, target %d, zone %s)", reason, target,
-                ZoneName(zone));
-    }
-    BroadcastJson(std::string("{\"type\":\"dragEnd\",\"cancelled\":") +
-                  (cancelled ? "true}" : "false}"));
-    Repaint(target_view);
-    Repaint(host);
-    UiThreadRequestRefresh();
+void ClearPress() {
+  g_press_owned = false;
+  g_suppress_initialize = false;
+  g_pressed_view = nullptr;
+  g_pressed_host = nullptr;
+  g_pressed_tab = 0;
+  g_press_x = 0.f;
+  g_press_y = 0.f;
+}
+
+void BeginOwnDrag() {
+  g_drag_source = g_pressed_tab;
+  g_drag_outside = false;
+  g_dragging = true;
+  InterlockedIncrement(&g_drag_begins);
+  GhostApply(g_pressed_view);
+  ARB_DEBUG("owned drag started: source tab %d, host %p", g_drag_source, g_pressed_host);
+  BroadcastJson("{\"type\":\"dragBegin\",\"draggedTabId\":" +
+                std::to_string(g_drag_source) + "}");
+}
+
+void UpdateOwnedDrag(const EventPoint& point) {
+  const StripRow* source_row = nullptr;
+  const StripSnapshot* strip = FindStripSnapshotForTabView(g_pressed_view, &source_row);
+  if (!strip || !source_row || strip->host_view != g_pressed_host) {
+    return;
   }
-  reinterpret_cast<EndDragFn>(g_feature.end_original)(self, reason);
+  const int32_t pointer_x = source_row->x + static_cast<int32_t>(std::lround(point.x));
+  const int32_t pointer_y = source_row->y + static_cast<int32_t>(std::lround(point.y));
+  int32_t left = INT32_MAX;
+  int32_t right = INT32_MIN;
+  int32_t top = INT32_MAX;
+  for (size_t index = 0; index < strip->count; ++index) {
+    const StripRow& row = strip->rows[index];
+    left = std::min(left, row.x - row.shift);
+    right = std::max(right, row.x + row.width);
+    top = std::min(top, row.y);
+  }
+  const int margin = std::max(16, 2 * std::max(GetSystemMetrics(SM_CXDRAG),
+                                               GetSystemMetrics(SM_CYDRAG)));
+  g_drag_outside = strip->count == 0 || pointer_x < left - margin || pointer_x > right + margin ||
+                   pointer_y < top - margin || pointer_y > strip->content_bottom + margin;
+  if (g_drag_outside) {
+    ClearDropHit();
+    return;
+  }
+  SetDropHit(*strip, FindDropTarget(*strip, pointer_y, g_drag_source));
+}
+
+void EndOwnDrag(bool cancelled) {
+  if (!g_dragging.exchange(false)) {
+    ClearPress();
+    return;
+  }
+  const int source = g_drag_source;
+  const int target = g_drop_target_tab;
+  const int zone = g_drop_zone;
+  const bool outside = g_drag_outside;
+  POINT cursor{};
+  GetCursorPos(&cursor);
+
+  GhostEnd();
+  ClearDropHit();
+  g_drag_source = 0;
+  g_drag_outside = false;
+  ClearPress();
+
+  if (!cancelled && outside && source) {
+    InterlockedIncrement(&g_drag_outs);
+    ARB_INFO("dragged tab %d out to screen point %ld,%ld", source, cursor.x, cursor.y);
+    BroadcastJson("{\"type\":\"dragOut\",\"draggedTabId\":" + std::to_string(source) +
+                  ",\"screenX\":" + std::to_string(cursor.x) + ",\"screenY\":" +
+                  std::to_string(cursor.y) + "}");
+  } else if (!cancelled && source && target && zone != kZoneNone) {
+    InterlockedIncrement(&g_drops);
+    ARB_INFO("dropped tab %d onto tab %d (%s)", source, target, ZoneName(zone));
+    BroadcastJson("{\"type\":\"dropOnto\",\"draggedTabId\":" + std::to_string(source) +
+                  ",\"targetTabId\":" + std::to_string(target) + ",\"zone\":\"" +
+                  ZoneName(zone) + "\"}");
+  } else {
+    ARB_DEBUG("owned drag ended without a drop (cancelled %d, target %d, zone %s)",
+              cancelled ? 1 : 0, target, ZoneName(zone));
+  }
+  BroadcastJson(std::string("{\"type\":\"dragEnd\",\"cancelled\":") +
+                (cancelled ? "true}" : "false}"));
+  UiThreadRequestRefresh();
+}
+
+using InitializeDragFn = void (*)(void* self, void* node, const void* selection,
+                                  const void* event);
+using OnMouseDraggedFn = bool (*)(void* self, const void* event);
+using OnMouseReleasedFn = void (*)(void* self, const void* event);
+using OnMouseCaptureLostFn = void (*)(void* self);
+
+void HookInitializeDrag(void* self, void* node, const void* selection, const void* event) {
+  if (g_suppress_initialize && g_press_owned) {
+    return;
+  }
+  reinterpret_cast<InitializeDragFn>(g_feature.initialize_original)(self, node, selection, event);
+}
+
+bool HookOnMouseDragged(void* self, const void* event) {
+  if (!g_press_owned || self != g_pressed_view) {
+    return reinterpret_cast<OnMouseDraggedFn>(g_feature.dragged_original)(self, event);
+  }
+  const EventPoint point = ReadEventPoint(event);
+  if (!point.valid) {
+    EndOwnDrag(true);
+    return true;
+  }
+  if (!g_dragging.load()) {
+    const int threshold_x = std::max(1, GetSystemMetrics(SM_CXDRAG));
+    const int threshold_y = std::max(1, GetSystemMetrics(SM_CYDRAG));
+    if (std::fabs(point.x - g_press_x) < threshold_x &&
+        std::fabs(point.y - g_press_y) < threshold_y) {
+      return true;
+    }
+    BeginOwnDrag();
+  }
+  UpdateOwnedDrag(point);
+  return true;
+}
+
+void HookOnMouseReleased(void* self, const void* event) {
+  if (!g_press_owned || self != g_pressed_view) {
+    reinterpret_cast<OnMouseReleasedFn>(g_feature.released_original)(self, event);
+    return;
+  }
+  if (g_dragging.load()) {
+    const EventPoint point = ReadEventPoint(event);
+    if (point.valid) {
+      UpdateOwnedDrag(point);
+    }
+    EndOwnDrag(false);
+    return;  // ArborTab owns a drag release; do not re-select or invoke native EndDrag.
+  }
+  ClearPress();
+  // A click never crossed the threshold: preserve Chrome's release selection and cleanup.
+  reinterpret_cast<OnMouseReleasedFn>(g_feature.released_original)(self, event);
+}
+
+void HookOnMouseCaptureLost(void* self) {
+  if (g_press_owned) {
+    EndOwnDrag(g_dragging.load());
+  }
+  reinterpret_cast<OnMouseCaptureLostFn>(g_feature.capture_lost_original)(self);
 }
 
 bool PrologueMatches(uint8_t* base, const FunctionEntry& entry) {
-  if (entry.prologue.empty()) {
-    return true;
-  }
-  return memcmp(base + entry.rva, entry.prologue.data(), entry.prologue.size()) == 0;
+  return entry.prologue.empty() ||
+         memcmp(base + entry.rva, entry.prologue.data(), entry.prologue.size()) == 0;
 }
 
 }  // namespace
 
-void NoteTabPressed(int tab_id) {
-  if (!g_dragging.load()) {
-    g_pressed_tab = tab_id;
+void PrepareOwnDragPress(void* tab_view, const void* event) {
+  if (!g_feature_ready.load() || g_dragging.load()) {
+    return;
+  }
+  ClearPress();
+  const EventPoint point = ReadEventPoint(event);
+  if (!point.valid || (point.flags & kMouseButtonMask) != kLeftMouseButton ||
+      (point.flags & (kSynthesizedEvent | kFromTouch)) != 0) {
+    return;
+  }
+  const StripRow* row = nullptr;
+  const StripSnapshot* strip = FindStripSnapshotForTabView(tab_view, &row);
+  if (!strip || !row || !IsTreeTab(row->tab_id)) {
+    return;
+  }
+  g_pressed_view = tab_view;
+  g_pressed_host = strip->host_view;
+  g_pressed_tab = row->tab_id;
+  g_press_x = point.x;
+  g_press_y = point.y;
+  g_press_owned = true;
+  g_suppress_initialize = true;
+}
+
+void FinishOwnDragPress(bool handled) {
+  g_suppress_initialize = false;
+  if (g_press_owned && !handled) {
+    ClearPress();
   }
 }
 
-// 0..1 while the indicator fades in after the target changed.
 float DropIndicatorOpacity() {
   if (!AnimationsEnabled()) {
     return 1.f;
@@ -363,26 +466,25 @@ void PaintDropTarget(void* tab_view, void* canvas, int32_t width, int32_t height
   }
   const int zone = g_drop_zone;
   if (zone != kZoneNest && zone != kZoneBefore && zone != kZoneAfter) {
-    return;  // kZoneEnd is drawn below the last row by the container (PaintDropEnd)
+    return;
   }
   const float opacity = DropIndicatorOpacity();
   if (opacity < 1.f) {
     RequestTabRepaint(tab_view);
   }
   const uint32_t accent = AccentColor(ThemeInk(tab_view));
-  const auto w = static_cast<float>(width);
-  const auto h = static_cast<float>(height);
+  const auto width_f = static_cast<float>(width);
+  const auto height_f = static_cast<float>(height);
   if (zone == kZoneNest) {
-    // The tab the drop would nest under: a soft tint with a fine ring, under its contents.
-    const float radius = h / 2.f < 8.f ? h / 2.f : 8.f;
-    FillRoundRect(canvas, 1.f, 1.f, w - 2.f, h - 2.f, radius, Fade(WithAlpha(accent, 0x2E), opacity));
-    StrokeRoundRect(canvas, 1.f, 1.f, w - 2.f, h - 2.f, radius, 1.5f, Fade(accent, opacity));
+    const float radius = height_f / 2.f < 8.f ? height_f / 2.f : 8.f;
+    FillRoundRect(canvas, 1.f, 1.f, width_f - 2.f, height_f - 2.f, radius,
+                  Fade(WithAlpha(accent, 0x2E), opacity));
+    StrokeRoundRect(canvas, 1.f, 1.f, width_f - 2.f, height_f - 2.f, radius, 1.5f,
+                    Fade(accent, opacity));
     return;
   }
-  // Edge drops insert a sibling: a thin round-capped line at the edge, starting at the row's
-  // own indent, which is where the dropped tab will land.
-  const float y = zone == kZoneBefore ? 1.5f : h - 1.5f;
-  StrokeLine(canvas, 6.f, y, w - 6.f, y, 2.f, Fade(accent, opacity));
+  const float y = zone == kZoneBefore ? 1.5f : height_f - 1.5f;
+  StrokeLine(canvas, 6.f, y, width_f - 6.f, y, 2.f, Fade(accent, opacity));
 }
 
 void PaintDropEnd(const void* host_view, void* canvas) {
@@ -397,22 +499,12 @@ void PaintDropEnd(const void* host_view, void* canvas) {
   if (opacity < 1.f) {
     RequestAnimationFrame();
   }
-  // The dropped tab becomes the last top-level tab: draw at depth 0.
   const StripRow& last = strip->rows[strip->count - 1];
   const auto left = static_cast<float>(last.x - last.shift);
   const auto right = static_cast<float>(last.x + last.width);
   const auto y = static_cast<float>(strip->content_bottom) + 1.5f;
   StrokeLine(canvas, left + 6.f, y, right - 6.f, y, 2.f,
              Fade(AccentColor(ThemeInk(host_view)), opacity));
-}
-
-void RefreshDragGhost(const void* host_view) {
-  if (!g_dragging.load()) {
-    return;
-  }
-  if (const StripSnapshot* strip = FindStripSnapshot(host_view)) {
-    GhostRefreshFrom(*strip, /*may_create=*/false);
-  }
 }
 
 int CurrentDropTargetTabId() { return g_drop_target_tab; }
@@ -430,63 +522,94 @@ bool InstallDragFeature(HMODULE chrome_dll, const Offsets& offsets, DragFeature&
     out = found->second;
     return true;
   };
-  DragOffsets parsed;
-  if (!field("DraggedTabsContainer.host_view_", parsed.container_host_view)) {
-    ARB_WARN("offsets table lacks the fields the drag feature needs");
+  if (!field("ui::Event.flags_", g_geometry.event_flags) ||
+      !field("ui::LocatedEvent.location_", g_geometry.event_location)) {
+    ARB_WARN("offsets table lacks the event fields the drag feature needs");
     return false;
   }
-  g_offsets = parsed;
 
-  const auto attach = [&](const char* name, void* detour, void** original, uint32_t& rva) {
-    const auto found = offsets.hooks.find(name);
-    if (found == offsets.hooks.end()) {
-      ARB_WARN("%s is not in the offsets table", name);
-      return false;
-    }
-    auto* base = reinterpret_cast<uint8_t*>(chrome_dll);
-    if (!PrologueMatches(base, found->second)) {
-      ARB_WARN("prologue mismatch for %s; drag feature disabled", name);
-      return false;
-    }
-    if (MH_CreateHook(base + found->second.rva, detour, original) != MH_OK) {
-      ARB_WARN("MH_CreateHook(%s) failed", name);
-      return false;
-    }
-    if (MH_EnableHook(base + found->second.rva) != MH_OK) {
-      MH_RemoveHook(base + found->second.rva);
-      ARB_WARN("MH_EnableHook(%s) failed", name);
-      return false;
-    }
-    rva = found->second.rva;
-    ARB_INFO("hooked %s at 0x%08x", name, rva);
-    return true;
+  constexpr const char* kConcreteInitialize = "TabDragHandler::InitializeDrag";
+  constexpr const char* kImplInitialize = "TabDragHandlerImpl::InitializeDrag";
+  const bool concrete = offsets.hooks.count(kConcreteInitialize) != 0;
+  const bool impl = offsets.hooks.count(kImplInitialize) != 0;
+  if (concrete == impl) {
+    ARB_WARN("offsets table must contain exactly one InitializeDrag hook target");
+    return false;
+  }
+  const char* initialize_name = concrete ? kConcreteInitialize : kImplInitialize;
+
+  struct HookPlan {
+    const char* name;
+    void* detour;
+    void** original;
+    uint32_t* rva;
+    void* target = nullptr;
+  };
+  HookPlan plans[] = {
+      {initialize_name, reinterpret_cast<void*>(&HookInitializeDrag),
+       &g_feature.initialize_original, &g_feature.initialize_rva},
+      {"TabView::OnMouseDragged", reinterpret_cast<void*>(&HookOnMouseDragged),
+       &g_feature.dragged_original, &g_feature.dragged_rva},
+      {"TabView::OnMouseReleased", reinterpret_cast<void*>(&HookOnMouseReleased),
+       &g_feature.released_original, &g_feature.released_rva},
+      {"views::internal::RootView::OnMouseCaptureLost",
+       reinterpret_cast<void*>(&HookOnMouseCaptureLost), &g_feature.capture_lost_original,
+       &g_feature.capture_lost_rva},
   };
 
-  constexpr const char* kConcreteEndDrag = "TabDragHandler::EndDrag";
-  constexpr const char* kImplEndDrag = "TabDragHandlerImpl::EndDrag";
-  const auto concrete_end = offsets.hooks.find(kConcreteEndDrag);
-  const auto impl_end = offsets.hooks.find(kImplEndDrag);
-  // Ending the drag is required to clear the drop target and report the result. Chrome 158
-  // collapsed TabDragHandlerImpl into the concrete TabDragHandler class; the ABI stayed the same.
-  if ((concrete_end != offsets.hooks.end()) == (impl_end != offsets.hooks.end())) {
-    ARB_WARN("offsets table must contain exactly one EndDrag hook target");
+  auto* base = reinterpret_cast<uint8_t*>(chrome_dll);
+  for (HookPlan& plan : plans) {
+    const auto found = offsets.hooks.find(plan.name);
+    if (found == offsets.hooks.end()) {
+      ARB_WARN("%s is not in the offsets table; drag feature disabled", plan.name);
+      return false;
+    }
+    if (!PrologueMatches(base, found->second)) {
+      ARB_WARN("prologue mismatch for %s; drag feature disabled", plan.name);
+      return false;
+    }
+    plan.target = base + found->second.rva;
+    *plan.rva = found->second.rva;
+  }
+
+  constexpr size_t kHookCount = sizeof(plans) / sizeof(plans[0]);
+  size_t created = 0;
+  for (; created < kHookCount; ++created) {
+    HookPlan& plan = plans[created];
+    if (MH_CreateHook(plan.target, plan.detour, plan.original) != MH_OK) {
+      ARB_WARN("MH_CreateHook(%s) failed; drag feature disabled", plan.name);
+      break;
+    }
+  }
+  if (created != kHookCount) {
+    while (created > 0) {
+      MH_RemoveHook(plans[--created].target);
+    }
     return false;
   }
-  const char* end_name =
-      concrete_end != offsets.hooks.end() ? kConcreteEndDrag : kImplEndDrag;
+  bool queued = true;
+  for (HookPlan& plan : plans) {
+    if (MH_QueueEnableHook(plan.target) != MH_OK) {
+      ARB_WARN("MH_QueueEnableHook(%s) failed; drag feature disabled", plan.name);
+      queued = false;
+      break;
+    }
+  }
+  if (!queued || MH_ApplyQueued() != MH_OK) {
+    ARB_WARN("could not enable the owned-drag hook set; drag feature disabled");
+    for (HookPlan& plan : plans) {
+      MH_DisableHook(plan.target);
+      MH_RemoveHook(plan.target);
+    }
+    return false;
+  }
+  for (const HookPlan& plan : plans) {
+    ARB_INFO("hooked %s at 0x%08x", plan.name, *plan.rva);
+  }
 
-  const bool handle_ok =
-      attach("DraggedTabsContainer::HandleTabDragInContainer",
-             reinterpret_cast<void*>(&HookHandleTabDragInContainer), &g_feature.handle_original,
-             g_feature.handle_rva);
-  const bool end_ok = handle_ok &&
-      attach(end_name, reinterpret_cast<void*>(&HookEndDrag), &g_feature.end_original,
-             g_feature.end_rva);
-
-  auto* module = reinterpret_cast<uint8_t*>(chrome_dll);
-  const auto function = [&offsets, module](const char* name) -> void* {
+  const auto function = [&offsets, base](const char* name) -> void* {
     const auto found = offsets.functions.find(name);
-    return found == offsets.functions.end() ? nullptr : module + found->second.rva;
+    return found == offsets.functions.end() ? nullptr : base + found->second.rva;
   };
   const auto base_offset = offsets.bases.find("views::View>ui::LayerOwner");
   const auto layer_field = offsets.fields.find("ui::LayerOwner.layer_");
@@ -496,13 +619,15 @@ bool InstallDragFeature(HMODULE chrome_dll, const Offsets& offsets, DragFeature&
         reinterpret_cast<GhostApi::SetPaintToLayerFn>(function("views::View::SetPaintToLayer"));
     g_ghost.destroy_layer =
         reinterpret_cast<GhostApi::DestroyLayerFn>(function("views::View::DestroyLayer"));
-    g_ghost.set_opacity = reinterpret_cast<GhostApi::SetOpacityFn>(function("ui::Layer::SetOpacity"));
+    g_ghost.set_opacity =
+        reinterpret_cast<GhostApi::SetOpacityFn>(function("ui::Layer::SetOpacity"));
   }
-  ARB_INFO("translucent drag source: %s", g_ghost.set_opacity ? "on" : "off");
+  ARB_INFO("one-shot translucent drag source: %s", g_ghost.set_opacity ? "on" : "off");
 
+  g_feature.installed = true;
   feature = g_feature;
-  feature.installed = handle_ok && end_ok;
-  return feature.installed;
+  g_feature_ready = true;
+  return true;
 }
 
 }  // namespace arbortab
