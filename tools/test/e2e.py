@@ -3,11 +3,12 @@ tools/dev/dev.py first).
 
     uv run --with websocket-client python tools/test/e2e.py tree       # open / collapse / close
     uv run --with websocket-client python tools/test/e2e.py drop       # drop protocol
+    uv run --with websocket-client python tools/test/e2e.py drag-out   # cross-window protocol
     uv run --with websocket-client python tools/test/e2e.py tree-visual
 
 The native drop detection needs a real mouse drag, which cannot be automated reliably; the
-`drop` scenario drives everything downstream of it through the extension's test hooks
-(`arbortab.__testDragBegin` / `__testDrop` / `__testDragEnd`).
+`drop` and `drag-out` scenarios drive everything downstream of it through the extension's test
+hooks (`arbortab.__testDragBegin` / `__testDrop` / `__testDragOut` / `__testDragEnd`).
 """
 from __future__ import annotations
 
@@ -270,6 +271,62 @@ def drop_scenario() -> int:
     return 0 if ok else 1
 
 
+def drag_out_scenario() -> int:
+    """Exercises dragOut downstream of native hit-testing; this is not a real mouse drag."""
+    browser, worker = connect()
+    parent = call_worker(
+        worker, "chrome.tabs.create({url:'https://example.com/', active:false}).then(t => t.id)",
+        browser)
+    time.sleep(1.0)
+    children = []
+    for url in ("https://example.org/", "https://www.iana.org/help/example-domains"):
+        child = call_worker(
+            worker,
+            f"chrome.tabs.create({{url:'{url}', openerTabId:{parent}, active:false}}).then(t => t.id)",
+            browser)
+        children.append(child)
+        time.sleep(1.0)
+    source_window = call_worker(worker, f"chrome.tabs.get({parent}).then(t => t.windowId)", browser)
+    source_tree = extension_state(worker, browser)["windows"].get(str(source_window), {})
+    source_parents = {int(tab): int(owner) for tab, owner in source_tree.get("parents", [])}
+    ok = report("drag-out fixture is a parent with two children",
+                all(source_parents.get(child) == parent for child in children),
+                str(source_parents))
+
+    call_worker(worker, f"arbortab.__testDragBegin({parent})", browser)
+    call_worker(worker, f"arbortab.__testDragOut({parent}, 320, 240)", browser)
+    call_worker(worker, "arbortab.__testDragEnd()", browser)
+    time.sleep(2.0)
+
+    moved_tabs = call_worker(
+        worker,
+        f"Promise.all({json.dumps([parent, *children])}.map(id => chrome.tabs.get(id)))"
+        ".then(ts => ts.map(t => ({id:t.id, windowId:t.windowId, index:t.index})))",
+        browser)
+    target_window = moved_tabs[0]["windowId"]
+    state = extension_state(worker, browser)
+    target_tree = state["windows"].get(str(target_window), {})
+    parents = {int(tab): int(owner) for tab, owner in target_tree.get("parents", [])}
+    order = [int(tab) for tab in target_tree.get("order", [])]
+
+    ok &= report("drag-out created another window", target_window != source_window,
+                 f"{source_window} -> {target_window}")
+    ok &= report("the complete subtree moved to one window",
+                 all(tab["windowId"] == target_window for tab in moved_tabs),
+                 json.dumps(moved_tabs))
+    ok &= report("drag-out preserved subtree pre-order", order[:3] == [parent, *children], str(order))
+    ok &= report("drag-out preserved parent relations",
+                 all(parents.get(child) == parent for child in children), str(parents))
+    ok &= report("temporary collapse was restored",
+                 parent not in {int(tab) for tab in target_tree.get("collapsed", [])})
+
+    call_worker(worker, f"chrome.windows.remove({target_window})", browser)
+    time.sleep(1.0)
+    ok &= report("browser survived the drag-out scenario",
+                 bool(extension_state(worker, browser).get("connected")))
+    return 0 if ok else 1
+
+
 def tree_visual() -> int:
     """Builds a small tree so the strip can be inspected (and screenshotted) by hand."""
     browser, worker = connect()
@@ -284,7 +341,12 @@ def tree_visual() -> int:
     return 0
 
 
-SCENARIOS = {"tree": tree_scenario, "drop": drop_scenario, "tree-visual": tree_visual}
+SCENARIOS = {
+    "tree": tree_scenario,
+    "drop": drop_scenario,
+    "drag-out": drag_out_scenario,
+    "tree-visual": tree_visual,
+}
 
 
 def main() -> int:
