@@ -3,12 +3,14 @@ tools/dev/dev.py first).
 
     uv run --with websocket-client python tools/test/e2e.py tree       # open / collapse / close
     uv run --with websocket-client python tools/test/e2e.py drop       # drop protocol
-    uv run --with websocket-client python tools/test/e2e.py drag-out   # cross-window protocol
+    uv run --with websocket-client python tools/test/e2e.py drag-out      # cross-window protocol
+    uv run --with websocket-client python tools/test/e2e.py boundary-snap # grouped block snapping
     uv run --with websocket-client python tools/test/e2e.py tree-visual
 
 The native drop detection needs a real mouse drag, which cannot be automated reliably; the
 `drop` and `drag-out` scenarios drive everything downstream of it through the extension's test
-hooks (`arbortab.__testDragBegin` / `__testDrop` / `__testDragOut` / `__testDragEnd`).
+hooks (`arbortab.__testDragBegin` / `__testDrop` / `__testDragOut` / `__testDragEnd`). The
+`boundary-snap` scenario uses Chrome's real tabs.group API without requiring tabGroups permission.
 """
 from __future__ import annotations
 
@@ -294,7 +296,9 @@ def drag_out_scenario() -> int:
                 str(source_parents))
 
     call_worker(worker, f"arbortab.__testDragBegin({parent})", browser)
-    call_worker(worker, f"arbortab.__testDragOut({parent}, 320, 240)", browser)
+    # Deliberately far outside the source window: the extension must clamp the DIP position or
+    # retry windows.create without bounds instead of losing the drag-out.
+    call_worker(worker, f"arbortab.__testDragOut({parent}, 100000, 100000)", browser)
     call_worker(worker, "arbortab.__testDragEnd()", browser)
     time.sleep(2.0)
 
@@ -311,6 +315,8 @@ def drag_out_scenario() -> int:
 
     ok &= report("drag-out created another window", target_window != source_window,
                  f"{source_window} -> {target_window}")
+    ok &= report("out-of-range DIP coordinates still created the window",
+                 target_window != source_window)
     ok &= report("the complete subtree moved to one window",
                  all(tab["windowId"] == target_window for tab in moved_tabs),
                  json.dumps(moved_tabs))
@@ -323,6 +329,99 @@ def drag_out_scenario() -> int:
     call_worker(worker, f"chrome.windows.remove({target_window})", browser)
     time.sleep(1.0)
     ok &= report("browser survived the drag-out scenario",
+                 bool(extension_state(worker, browser).get("connected")))
+    return 0 if ok else 1
+
+
+def boundary_snap_scenario() -> int:
+    """Groups tree children through chrome.tabs and checks nearest-boundary snapping."""
+    browser, worker = connect()
+
+    def fixture():
+        parent = call_worker(
+            worker, "chrome.tabs.create({url:'https://example.com/', active:false}).then(t => t.id)",
+            browser)
+        time.sleep(0.8)
+        children = []
+        for url in ("https://example.org/", "https://example.net/",
+                    "https://www.iana.org/help/example-domains"):
+            child = call_worker(
+                worker,
+                f"chrome.tabs.create({{url:'{url}', openerTabId:{parent}, active:false}})"
+                ".then(t => t.id)",
+                browser)
+            children.append(child)
+            time.sleep(0.7)
+        return parent, children
+
+    def tab_positions(ids):
+        return call_worker(
+            worker,
+            f"Promise.all({json.dumps(ids)}.map(id => chrome.tabs.get(id)))"
+            ".then(ts => ts.map(t => ({id:t.id,index:t.index,groupId:t.groupId})))",
+            browser)
+
+    front_parent, front_children = fixture()
+    call_worker(worker, f"chrome.tabs.group({{tabIds:[{front_children[0]}]}})", browser)
+    time.sleep(2.0)
+    front_tabs = {tab["id"]: tab for tab in tab_positions([front_parent, *front_children])}
+    front_state = extension_state(worker, browser)["windows"]
+    front_window = call_worker(
+        worker, f"chrome.tabs.get({front_parent}).then(t => t.windowId)", browser)
+    front_tree = front_state[str(front_window)]
+    front_parents = {int(tab): int(owner) for tab, owner in front_tree.get("parents", [])}
+    ok = report("front grouped block snapped before the top-level subtree",
+                front_tabs[front_children[0]]["index"] < front_tabs[front_parent]["index"],
+                json.dumps(list(front_tabs.values())))
+    ok &= report("front snap preserved the remaining child relations",
+                 all(front_parents.get(tab) == front_parent for tab in front_children[1:]),
+                 str(front_parents))
+
+    back_parent, back_children = fixture()
+    call_worker(worker, f"chrome.tabs.group({{tabIds:[{back_children[1]}]}})", browser)
+    time.sleep(2.0)
+    back_tabs = {tab["id"]: tab for tab in tab_positions([back_parent, *back_children])}
+    back_state = extension_state(worker, browser)["windows"]
+    back_window = call_worker(
+        worker, f"chrome.tabs.get({back_parent}).then(t => t.windowId)", browser)
+    back_tree = back_state[str(back_window)]
+    back_parents = {int(tab): int(owner) for tab, owner in back_tree.get("parents", [])}
+    ok &= report("back grouped block snapped after the top-level subtree",
+                 back_tabs[back_children[1]]["index"] > back_tabs[back_children[2]]["index"],
+                 json.dumps(list(back_tabs.values())))
+    ok &= report("back snap preserved the remaining child relations",
+                 back_parents.get(back_children[0]) == back_parent
+                 and back_parents.get(back_children[2]) == back_parent,
+                 str(back_parents))
+
+    entering_parent, entering_children = fixture()
+    entering_group = call_worker(
+        worker, f"chrome.tabs.group({{tabIds:[{entering_children[1]}]}})", browser)
+    call_worker(
+        worker,
+        f"chrome.tabs.ungroup([{entering_children[1]}]).then(() => {entering_group})",
+        browser)
+    time.sleep(2.0)
+    entering_tabs = {
+        tab["id"]: tab for tab in tab_positions([entering_parent, *entering_children])
+    }
+    entering_state = extension_state(worker, browser)["windows"]
+    entering_window = call_worker(
+        worker, f"chrome.tabs.get({entering_parent}).then(t => t.windowId)", browser)
+    entering_tree = entering_state[str(entering_window)]
+    entering_parents = {
+        int(tab): int(owner) for tab, owner in entering_tree.get("parents", [])
+    }
+    ok &= report("an ungrouped tab became a root at the nearest subtree boundary",
+                 entering_parents.get(entering_children[1]) is None
+                 and entering_tabs[entering_children[1]]["index"]
+                 > entering_tabs[entering_children[2]]["index"],
+                 json.dumps(list(entering_tabs.values())))
+    ok &= report("ungroup snapping preserved the old subtree relations",
+                 entering_parents.get(entering_children[0]) == entering_parent
+                 and entering_parents.get(entering_children[2]) == entering_parent,
+                 str(entering_parents))
+    ok &= report("browser survived the boundary-snap scenario",
                  bool(extension_state(worker, browser).get("connected")))
     return 0 if ok else 1
 
@@ -345,6 +444,7 @@ SCENARIOS = {
     "tree": tree_scenario,
     "drop": drop_scenario,
     "drag-out": drag_out_scenario,
+    "boundary-snap": boundary_snap_scenario,
     "tree-visual": tree_visual,
 }
 

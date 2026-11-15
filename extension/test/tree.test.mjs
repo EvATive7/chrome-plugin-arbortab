@@ -15,6 +15,21 @@ function build(order, parents = {}) {
   return state;
 }
 
+function applySnapSteps(order, steps) {
+  const result = [...order];
+  for (const step of steps) {
+    for (const tabId of step.tabIds) {
+      result.splice(result.indexOf(tabId), 1);
+    }
+    const positions = step.blockIds.map((tabId) => result.indexOf(tabId));
+    const at = step.moveTo === 'before-block'
+      ? Math.min(...positions)
+      : Math.max(...positions) + 1;
+    result.splice(at, 0, ...step.tabIds);
+  }
+  return result;
+}
+
 test('preorder is the strip order', () => {
   const state = build([1, 2, 3, 4, 5], { 2: 1, 3: 1, 4: 3 });
   assert.deepEqual(tree.preorder(state), [1, 2, 3, 4, 5]);
@@ -129,6 +144,78 @@ test('detached subtrees can move to another window', () => {
   assert.deepEqual(tree.preorder(source), []);
   assert.deepEqual(tree.preorder(target), [9, 1, 2, 3]);
   assert.equal(tree.parentOf(target, 3), 2);
+});
+
+test('boundary snap moves a short subtree prefix after a foreign block', () => {
+  const state = build([1, 2, 3, 4], { 2: 1, 3: 1 });
+  const live = [1, 90, 2, 3, 4];
+  const steps = tree.planTopLevelBoundarySnaps(state, live, [1, 2, 3, 4]);
+  assert.deepEqual(steps, [
+    { tabIds: [1], blockIds: [90], moveTo: 'after-block' },
+  ]);
+  assert.deepEqual(applySnapSteps(live, steps), [90, 1, 2, 3, 4]);
+});
+
+test('boundary snap moves a short subtree suffix before a foreign block', () => {
+  const state = build([1, 2, 3, 4], { 2: 1, 3: 1 });
+  const live = [1, 2, 90, 3, 4];
+  const steps = tree.planTopLevelBoundarySnaps(state, live, [1, 2, 3, 4]);
+  assert.deepEqual(steps, [
+    { tabIds: [3], blockIds: [90], moveTo: 'before-block' },
+  ]);
+  assert.deepEqual(applySnapSteps(live, steps), [1, 2, 3, 90, 4]);
+});
+
+test('boundary snap puts a tied block after the subtree', () => {
+  const state = build([1, 2], { 2: 1 });
+  const live = [1, 90, 2];
+  const steps = tree.planTopLevelBoundarySnaps(state, live, [1, 2]);
+  assert.deepEqual(steps, [
+    { tabIds: [2], blockIds: [90], moveTo: 'before-block' },
+  ]);
+  assert.deepEqual(applySnapSteps(live, steps), [1, 2, 90]);
+});
+
+test('boundary snap treats a nested subtree as one top-level subtree', () => {
+  const state = build([1, 2, 3, 4, 5], { 2: 1, 3: 2, 4: 2 });
+  const live = [1, 2, 3, 90, 4, 5];
+  const steps = tree.planTopLevelBoundarySnaps(state, live, [1, 2, 3, 4, 5]);
+  assert.deepEqual(steps, [
+    { tabIds: [4], blockIds: [90], moveTo: 'before-block' },
+  ]);
+  assert.deepEqual(applySnapSteps(live, steps), [1, 2, 3, 4, 90, 5]);
+});
+
+test('boundary snap resolves multiple blocks independently', () => {
+  const state = build([1, 2, 3], { 2: 1, 3: 1 });
+  const live = [1, 90, 2, 91, 3];
+  const steps = tree.planTopLevelBoundarySnaps(state, live, [1, 2, 3]);
+  assert.deepEqual(steps, [
+    { tabIds: [1], blockIds: [90], moveTo: 'after-block' },
+    { tabIds: [3], blockIds: [91], moveTo: 'before-block' },
+  ]);
+  assert.deepEqual(applySnapSteps(live, steps), [90, 1, 2, 3, 91]);
+});
+
+test('boundary snap leaves blocks already at top-level boundaries alone', () => {
+  const state = build([1, 2, 3, 4], { 2: 1, 3: 1 });
+  const live = [90, 1, 2, 3, 91, 4, 92];
+  assert.deepEqual(tree.planTopLevelBoundarySnaps(state, live, [1, 2, 3, 4]), []);
+});
+
+test('boundary snap handles a newly-entered tree root as a foreign block', () => {
+  const state = build([1, 2, 3, 4], { 2: 1, 3: 1 });
+  const live = [1, 4, 2, 3];
+  const steps = tree.planTopLevelBoundarySnaps(state, live, [1, 2, 3, 4]);
+  assert.deepEqual(steps, [
+    { tabIds: [1], blockIds: [4], moveTo: 'after-block' },
+  ]);
+  assert.deepEqual(applySnapSteps(live, steps), [4, 1, 2, 3]);
+});
+
+test('boundary snap does nothing when the window has only non-tree tabs', () => {
+  const state = tree.createWindowState([90, 91]);
+  assert.deepEqual(tree.planTopLevelBoundarySnaps(state, [90, 91], []), []);
 });
 
 test('displayState reports depth, hidden flags and child counts', () => {

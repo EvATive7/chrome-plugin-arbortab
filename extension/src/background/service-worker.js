@@ -285,11 +285,26 @@ const ORDER_GUARD_WINDOW_MS = 10000;
 const ORDER_GUARD_MAX_MOVES = 150;
 const ORDER_GUARD_PAUSE_MS = 30000;
 const ORDER_REFUSALS_RECORDED = 10;
+const BOUNDARY_SNAP_DELAY_MS = 300;
+const MOVE_BUSY_TIMEOUT_MS = 10000;
+const MOVE_BUSY_RETRY_MS = 100;
 
 /** Diagnostics for the debug export. */
 const orderStats = { requests: 0, moves: 0, refused: 0, movedEvents: 0, pauses: 0 };
 /** @type {Map<number, {running: Promise<void> | null, again: boolean, moves: number[], pausedUntil: number}>} */
 const orderRuns = new Map();
+const boundarySnapTimers = new Map();
+const boundarySnapActive = new Set();
+const programmaticMoveTabs = new Map();
+
+function orderRunFor(windowId) {
+  let run = orderRuns.get(windowId);
+  if (!run) {
+    run = { running: null, again: false, moves: [], pausedUntil: 0 };
+    orderRuns.set(windowId, run);
+  }
+  return run;
+}
 
 /**
  * Moves the window's tree tabs into the tree's pre-order. Runs one pass at a time per window;
@@ -297,11 +312,7 @@ const orderRuns = new Map();
  */
 function applyOrder(windowId) {
   orderStats.requests += 1;
-  let run = orderRuns.get(windowId);
-  if (!run) {
-    run = { running: null, again: false, moves: [], pausedUntil: 0 };
-    orderRuns.set(windowId, run);
-  }
+  const run = orderRunFor(windowId);
   if (run.running) {
     run.again = true;
     return run.running;
@@ -319,52 +330,208 @@ function applyOrder(windowId) {
   return run.running;
 }
 
+function topLevelRoot(state, tabId) {
+  const ancestors = tree.ancestorIds(state, tabId);
+  return ancestors.length ? ancestors[ancestors.length - 1] : tabId;
+}
+
+function isTabsBusyError(error) {
+  return /Tabs cannot be edited right now/i.test(String(error));
+}
+
+function recordMoveRefused(windowId, wanted, landed, error = null) {
+  orderStats.refused += 1;
+  if (orderStats.refused <= ORDER_REFUSALS_RECORDED) {
+    record('orderMoveRefused', {
+      windowId,
+      wanted,
+      landed,
+      ...(error ? { error: String(error) } : {}),
+    });
+  }
+}
+
+async function moveTreeTabWithRetry(windowId, tabId, wantedForTabs, run) {
+  const busyDeadline = Date.now() + MOVE_BUSY_TIMEOUT_MS;
+  let busyRetryMs = MOVE_BUSY_RETRY_MS;
+  let reportedBusy = false;
+  while (true) {
+    const tabs = await chrome.tabs.query({ windowId });
+    tabs.sort((a, b) => a.index - b.index);
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    const wanted = wantedForTabs(tabs);
+    if (!tab || wanted == null || tab.index === wanted) {
+      return true;
+    }
+    if (!noteMove(windowId, run, tabs)) {
+      return false;
+    }
+    orderStats.moves += 1;
+    let moved;
+    try {
+      const programmaticUntil = Date.now() + 2000;
+      programmaticMoveTabs.set(tabId, programmaticUntil);
+      setTimeout(() => {
+        if (programmaticMoveTabs.get(tabId) === programmaticUntil) {
+          programmaticMoveTabs.delete(tabId);
+        }
+      }, 2100);
+      moved = await chrome.tabs.move(tabId, { index: wanted });
+    } catch (error) {
+      programmaticMoveTabs.delete(tabId);
+      if (isTabsBusyError(error) && Date.now() < busyDeadline) {
+        if (!reportedBusy) {
+          reportedBusy = true;
+          record('orderMoveBusyRetry', { windowId, tabId });
+        }
+        await new Promise((resolve) => setTimeout(resolve, busyRetryMs));
+        busyRetryMs = Math.min(1000, busyRetryMs * 2);
+        continue;
+      }
+      if (isTabsBusyError(error)) {
+        record('orderMoveBusyTimeout', { windowId, tabId, timeoutMs: MOVE_BUSY_TIMEOUT_MS });
+      } else {
+        recordMoveRefused(windowId, wanted, null, error);
+      }
+      return false;
+    }
+    const landed = Array.isArray(moved) ? moved[0] : moved;
+    if (!landed || landed.index !== wanted) {
+      recordMoveRefused(windowId, wanted, landed ? landed.index : null);
+      return false;
+    }
+    return true;
+  }
+}
+
 async function enforceOrder(windowId, run) {
   const state = windows.get(windowId);
   if (!state || Date.now() < run.pausedUntil) {
     return;
   }
-  // Each step re-reads the strip and fixes the first tree tab that does not directly follow its
-  // pre-order predecessor. Only tree tabs move, and only next to a neighbour: pinned tabs,
-  // groups and split views are never moved, nor split apart by a tab moved into them.
+  // Tree tabs keep pre-order. Tabs inside one top-level subtree stay adjacent, while pinned,
+  // grouped and split blocks may remain between different top-level subtrees.
   for (let step = 0; step < 4 * state.nodes.size + 16; step += 1) {
     const tabs = await chrome.tabs.query({ windowId });
     const byId = new Map(tabs.map((tab) => [tab.id, tab]));
-    const order = tree.preorder(state).filter((tabId) => byId.has(tabId));
+    const order = tree.preorder(state)
+      .filter((tabId) => byId.has(tabId) && isTreeTab(byId.get(tabId)));
     let target = null;
-    for (let index = 0; index < order.length && !target; index += 1) {
+    for (let index = 1; index < order.length && !target; index += 1) {
       const tab = byId.get(order[index]);
-      if (!isTreeTab(tab)) {
-        continue;
-      }
-      const previous = index > 0 ? byId.get(order[index - 1]) : null;
-      // tabs.move takes the final index: moving right past the predecessor shifts it left.
-      const wanted = !previous ? 0 : (tab.index < previous.index ? previous.index : previous.index + 1);
-      if (tab.index !== wanted) {
-        target = { tab, wanted };
+      const previous = byId.get(order[index - 1]);
+      const sameRoot = topLevelRoot(state, tab.id) === topLevelRoot(state, previous.id);
+      if ((sameRoot && tab.index !== previous.index + 1)
+        || (!sameRoot && tab.index < previous.index)) {
+        target = { tabId: tab.id, previousId: previous.id, sameRoot };
       }
     }
     if (!target) {
       return;
     }
-    if (!noteMove(windowId, run, tabs)) {
+    const moved = await moveTreeTabWithRetry(
+      windowId,
+      target.tabId,
+      (currentTabs) => {
+        const current = new Map(currentTabs.map((tab) => [tab.id, tab]));
+        const tab = current.get(target.tabId);
+        const previous = current.get(target.previousId);
+        if (!tab || !previous) {
+          return null;
+        }
+        if (!target.sameRoot && tab.index > previous.index) {
+          return null;
+        }
+        return tab.index < previous.index ? previous.index : previous.index + 1;
+      },
+      run,
+    );
+    if (!moved) {
       return;
     }
-    orderStats.moves += 1;
-    const moved = await chrome.tabs.move(target.tab.id, { index: target.wanted }).catch(() => null);
-    const landed = Array.isArray(moved) ? moved[0] : moved;
-    if (!landed || landed.index !== target.wanted) {
-      // Chrome put it elsewhere (or the tab is gone): retrying would only fight Chrome.
-      orderStats.refused += 1;
-      if (orderStats.refused <= ORDER_REFUSALS_RECORDED) {
-        record('orderMoveRefused', {
+  }
+}
+
+function scheduleTopLevelBoundarySnap(windowId) {
+  const pending = boundarySnapTimers.get(windowId);
+  if (pending) {
+    clearTimeout(pending);
+  }
+  boundarySnapTimers.set(windowId, setTimeout(() => {
+    boundarySnapTimers.delete(windowId);
+    if (boundarySnapActive.has(windowId)) {
+      scheduleTopLevelBoundarySnap(windowId);
+      return;
+    }
+    void snapTopLevelBoundaries(windowId).catch((error) => {
+      record('boundarySnapFailed', { windowId, error: String(error) });
+    });
+  }, BOUNDARY_SNAP_DELAY_MS));
+}
+
+async function snapTopLevelBoundaries(windowId) {
+  if (boundarySnapActive.has(windowId)) {
+    scheduleTopLevelBoundarySnap(windowId);
+    return;
+  }
+  boundarySnapActive.add(windowId);
+  try {
+    const run = orderRunFor(windowId);
+    if (run.running) {
+      await run.running;
+    }
+    const state = await syncWindow(windowId);
+    const tabs = await chrome.tabs.query({ windowId });
+    tabs.sort((a, b) => a.index - b.index);
+    const plans = tree.planTopLevelBoundarySnaps(
+      state,
+      tabs.map((tab) => tab.id),
+      tabs.filter(isTreeTab).map((tab) => tab.id),
+    );
+    for (const plan of plans) {
+      const tabIds = plan.moveTo === 'after-block'
+        ? [...plan.tabIds].reverse()
+        : plan.tabIds;
+      for (const tabId of tabIds) {
+        const moved = await moveTreeTabWithRetry(
           windowId,
-          wanted: target.wanted,
-          landed: landed ? landed.index : null,
-        });
+          tabId,
+          (currentTabs) => {
+            const byId = new Map(currentTabs.map((tab) => [tab.id, tab]));
+            const tab = byId.get(tabId);
+            const block = plan.blockIds.map((id) => byId.get(id)).filter(Boolean);
+            if (!tab || !block.length) {
+              return null;
+            }
+            if (plan.moveTo === 'after-block') {
+              const anchor = block.reduce((right, item) => item.index > right.index ? item : right);
+              if (tab.index === anchor.index + 1) {
+                return null;
+              }
+              return tab.index < anchor.index ? anchor.index : anchor.index + 1;
+            }
+            const anchor = block.reduce((left, item) => item.index < left.index ? item : left);
+            if (tab.index + 1 === anchor.index) {
+              return null;
+            }
+            return tab.index < anchor.index ? anchor.index - 1 : anchor.index;
+          },
+          run,
+        );
+        if (!moved) {
+          return;
+        }
       }
-      return;
     }
+    await syncWindow(windowId);
+    await applyOrder(windowId);
+    bumpState();
+    await saveSession();
+    if (plans.length) {
+      record('boundarySnap', { windowId, plans: plans.length });
+    }
+  } finally {
+    boundarySnapActive.delete(windowId);
   }
 }
 
@@ -441,15 +608,32 @@ function confirmClose(tabId, count) {
 async function onMoved(tabId, moveInfo) {
   await ensureInit();
   orderStats.movedEvents += 1;
-  if (dragActive) {
-    return; // the drag handlers decide the parent when the drop finishes
+  const programmaticUntil = programmaticMoveTabs.get(tabId);
+  if (programmaticUntil != null) {
+    programmaticMoveTabs.delete(tabId);
+    if (Date.now() <= programmaticUntil) {
+      return;
+    }
+  }
+  if (dragActive || boundarySnapActive.has(moveInfo.windowId)) {
+    return; // owned drag/snap handlers decide the final position
+  }
+  const movedTab = await chrome.tabs.get(tabId).catch(() => null);
+  if (!movedTab) {
+    return;
+  }
+  if (!isTreeTab(movedTab)) {
+    // Native group/pinned/split drags emit a burst of onMoved events. Wait for the release and
+    // then snap the complete foreign block to its nearest top-level subtree boundary.
+    scheduleTopLevelBoundarySnap(moveInfo.windowId);
+    return;
   }
   const state = stateFor(moveInfo.windowId);
   if (!tree.preorder(state).includes(tabId)) {
     return;
   }
-  // Someone reordered tabs outside the drop protocol: keep every parent relation and
-  // re-derive the sibling order from the strip.
+  // Someone reordered a tree tab outside the drop protocol: keep every parent relation and
+  // re-derive sibling order from the strip.
   const tabs = await chrome.tabs.query({ windowId: moveInfo.windowId });
   tabs.sort((a, b) => a.index - b.index);
   const changed = tree.adoptOrder(state, tabs.map((tab) => tab.id));
@@ -489,7 +673,7 @@ async function onAttached(tabId, attachInfo) {
   if (source) {
     await syncWindow(attachInfo.fromWindowId);
   }
-  await applyOrder(attachInfo.newWindowId);
+  scheduleTopLevelBoundarySnap(attachInfo.newWindowId);
   bumpState();
   await saveSession();
 }
@@ -518,17 +702,10 @@ async function onUpdated(tabId, changeInfo, tab) {
   if (!('pinned' in changeInfo) && !('groupId' in changeInfo) && !('splitViewId' in changeInfo)) {
     return;
   }
-  const state = stateFor(tab.windowId);
-  if (!isTreeTab(tab)
-    && (tree.parentOf(state, tabId) != null || tree.childIdsOf(state, tabId).length)) {
-    // Leaving the tree scope (pinned / grouped / split) promotes the children one level.
-    tree.promoteOut(state, tabId);
-    const tabs = await chrome.tabs.query({ windowId: tab.windowId });
-    tabs.sort((a, b) => a.index - b.index);
-    tree.adoptOrder(state, tabs.map((candidate) => candidate.id));
-    bumpState();
-    await saveSession();
-  }
+  await syncWindow(tab.windowId);
+  scheduleTopLevelBoundarySnap(tab.windowId);
+  bumpState();
+  await saveSession();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -565,7 +742,7 @@ async function dispatchNativeMessage(message) {
       await dropOnto(message.targetTabId, message.zone, message.draggedTabId);
       break;
     case 'dragOut':
-      await dragOut(message.draggedTabId, message.screenX, message.screenY);
+      await dragOut(message.draggedTabId, message.windowX, message.windowY);
       break;
     default:
       break;
@@ -639,7 +816,50 @@ async function toggleCollapsed(tabId) {
   await saveSession();
 }
 
-async function dragOut(draggedTabId, screenX, screenY) {
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+async function createDragOutWindow(dragged, windowX, windowY) {
+  const createData = { tabId: dragged.id };
+  const sourceWindow = await chrome.windows.get(dragged.windowId).catch(() => null);
+  if (sourceWindow
+    && Number.isFinite(sourceWindow.left) && Number.isFinite(sourceWindow.top)
+    && Number.isFinite(sourceWindow.width) && Number.isFinite(sourceWindow.height)
+    && Number.isFinite(windowX) && Number.isFinite(windowY)) {
+    // Native sends browser-window-relative DIPs. Keep the requested top-left within the first
+    // half of the known-visible source window; Chrome otherwise rejects bounds that are less
+    // than 50% on a visible display.
+    const desiredLeft = sourceWindow.left + windowX - 120;
+    const desiredTop = sourceWindow.top + windowY - 20;
+    createData.left = Math.round(clamp(
+      desiredLeft,
+      sourceWindow.left,
+      sourceWindow.left + Math.max(0, Math.floor(sourceWindow.width / 2)),
+    ));
+    createData.top = Math.round(clamp(
+      desiredTop,
+      sourceWindow.top,
+      sourceWindow.top + Math.max(0, Math.floor(sourceWindow.height / 2)),
+    ));
+  }
+  try {
+    return await chrome.windows.create(createData);
+  } catch (error) {
+    if (!('left' in createData) && !('top' in createData)) {
+      throw error;
+    }
+    record('dragOutPositionFallback', {
+      tabId: dragged.id,
+      left: createData.left,
+      top: createData.top,
+      error: String(error),
+    });
+    return chrome.windows.create({ tabId: dragged.id });
+  }
+}
+
+async function dragOut(draggedTabId, windowX, windowY) {
   const dragged = await draggedTab(draggedTabId);
   if (!dragged || !isTreeTab(dragged)) {
     return;
@@ -659,12 +879,7 @@ async function dragOut(draggedTabId, screenX, screenY) {
     tabIds: new Set(subtree),
   };
   try {
-    const createData = { tabId: dragged.id };
-    if (Number.isFinite(screenX) && Number.isFinite(screenY)) {
-      createData.left = Math.round(screenX - 120);
-      createData.top = Math.round(screenY - 20);
-    }
-    const targetWindow = await chrome.windows.create(createData);
+    const targetWindow = await createDragOutWindow(dragged, windowX, windowY);
     if (targetWindow?.id == null) {
       throw new Error('Chrome did not return the new window id');
     }
@@ -1018,7 +1233,7 @@ globalThis.arbortab = {
     order: { ...orderStats } }),
   // Sandbox test hook: exercises the same path as a native dropOnto event.
   __testDrop: (targetTabId, zone, draggedTabId) => dropOnto(targetTabId, zone, draggedTabId),
-  __testDragOut: (draggedTabId, screenX, screenY) => dragOut(draggedTabId, screenX, screenY),
+  __testDragOut: (draggedTabId, windowX, windowY) => dragOut(draggedTabId, windowX, windowY),
   __testToggle: (tabId) => toggleCollapsed(tabId),
   __testDragBegin: onDragBegin,
   __testDragEnd: onDragEnd,

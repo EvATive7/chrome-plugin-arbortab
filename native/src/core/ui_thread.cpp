@@ -39,11 +39,26 @@ volatile LONG g_refresh_count = 0;
 // still a live container object: its vtable must be one we have seen during layout.
 std::vector<void*> g_known_vtables;
 
+// Reading the vtable is itself the dangerous operation. Keep it in an SEH-only helper so a
+// destroyed strip cannot crash the browser before RefreshOneHost gets its own guard.
+bool TryReadVtable(void* view, void*& vtable) {
+  __try {
+    vtable = *static_cast<void**>(view);
+    return true;
+  } __except (EXCEPTION_EXECUTE_HANDLER) {
+    vtable = nullptr;
+    return false;
+  }
+}
+
 bool LooksLikeTrackedHost(void* view) {
   if (!view) {
     return false;
   }
-  void* vtable = *static_cast<void**>(view);
+  void* vtable = nullptr;
+  if (!TryReadVtable(view, vtable)) {
+    return false;
+  }
   for (void* candidate : g_known_vtables) {
     if (candidate == vtable) {
       return true;

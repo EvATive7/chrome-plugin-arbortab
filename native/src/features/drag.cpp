@@ -36,6 +36,7 @@ bool g_press_owned = false;
 bool g_suppress_initialize = false;
 void* g_pressed_view = nullptr;
 void* g_pressed_host = nullptr;
+HWND g_pressed_window = nullptr;
 int g_pressed_tab = 0;
 float g_press_x = 0.f;
 float g_press_y = 0.f;
@@ -267,9 +268,41 @@ void ClearPress() {
   g_suppress_initialize = false;
   g_pressed_view = nullptr;
   g_pressed_host = nullptr;
+  g_pressed_window = nullptr;
   g_pressed_tab = 0;
   g_press_x = 0.f;
   g_press_y = 0.f;
+}
+
+bool CursorInBrowserWindowDip(const POINT& cursor, int& window_x, int& window_y) {
+  HWND window = g_pressed_window;
+  if (window && !IsWindow(window)) {
+    window = nullptr;
+  }
+  if (!window) {
+    window = GetCapture();
+  }
+  if (window) {
+    window = GetAncestor(window, GA_ROOT);
+  }
+  if (!window) {
+    window = GetAncestor(WindowFromPoint(cursor), GA_ROOT);
+  }
+  DWORD process_id = 0;
+  GetWindowThreadProcessId(window, &process_id);
+  if (process_id != GetCurrentProcessId()) {
+    window = nullptr;
+  }
+  RECT rect{};
+  if (!window || !GetWindowRect(window, &rect)) {
+    return false;
+  }
+  const UINT dpi = std::max<UINT>(96, GetDpiForWindow(window));
+  window_x = static_cast<int>(std::lround(
+      static_cast<double>(cursor.x - rect.left) * 96.0 / static_cast<double>(dpi)));
+  window_y = static_cast<int>(std::lround(
+      static_cast<double>(cursor.y - rect.top) * 96.0 / static_cast<double>(dpi)));
+  return true;
 }
 
 void BeginOwnDrag() {
@@ -322,6 +355,9 @@ void EndOwnDrag(bool cancelled) {
   const bool outside = g_drag_outside;
   POINT cursor{};
   GetCursorPos(&cursor);
+  int window_x = 0;
+  int window_y = 0;
+  const bool has_window_point = CursorInBrowserWindowDip(cursor, window_x, window_y);
 
   GhostEnd();
   ClearDropHit();
@@ -331,10 +367,17 @@ void EndOwnDrag(bool cancelled) {
 
   if (!cancelled && outside && source) {
     InterlockedIncrement(&g_drag_outs);
-    ARB_INFO("dragged tab %d out to screen point %ld,%ld", source, cursor.x, cursor.y);
-    BroadcastJson("{\"type\":\"dragOut\",\"draggedTabId\":" + std::to_string(source) +
-                  ",\"screenX\":" + std::to_string(cursor.x) + ",\"screenY\":" +
-                  std::to_string(cursor.y) + "}");
+    std::string message =
+        "{\"type\":\"dragOut\",\"draggedTabId\":" + std::to_string(source);
+    if (has_window_point) {
+      message += ",\"windowX\":" + std::to_string(window_x) +
+                 ",\"windowY\":" + std::to_string(window_y);
+      ARB_INFO("dragged tab %d out to window DIP %d,%d (screen px %ld,%ld)", source,
+               window_x, window_y, cursor.x, cursor.y);
+    } else {
+      ARB_WARN("dragged tab %d out without a browser-relative cursor point", source);
+    }
+    BroadcastJson(message + "}");
   } else if (!cancelled && source && target && zone != kZoneNone) {
     InterlockedIncrement(&g_drops);
     ARB_INFO("dropped tab %d onto tab %d (%s)", source, target, ZoneName(zone));
@@ -434,6 +477,15 @@ void PrepareOwnDragPress(void* tab_view, const void* event) {
   }
   g_pressed_view = tab_view;
   g_pressed_host = strip->host_view;
+  POINT cursor{};
+  if (GetCursorPos(&cursor)) {
+    HWND window = GetAncestor(WindowFromPoint(cursor), GA_ROOT);
+    DWORD process_id = 0;
+    GetWindowThreadProcessId(window, &process_id);
+    if (process_id == GetCurrentProcessId()) {
+      g_pressed_window = window;
+    }
+  }
   g_pressed_tab = row->tab_id;
   g_press_x = point.x;
   g_press_y = point.y;

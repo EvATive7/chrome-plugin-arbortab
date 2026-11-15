@@ -297,6 +297,92 @@ export function reconcile(state, liveTabIds) {
   return adoptOrder(state, liveTabIds);
 }
 
+/**
+ * Plans the tree-tab moves needed to keep every top-level subtree contiguous in the real strip.
+ *
+ * `treeTabIds` identifies tabs currently managed by ArborTab. A foreign block is normally a
+ * pinned/grouped/split run, but can also be a newly ungrouped root that Chrome left inside
+ * another root's subtree. The block itself is never moved. For each split subtree, the shorter
+ * tree segment crosses the block; ties move the suffix before the block, placing the block after
+ * the subtree.
+ *
+ * Each returned step is `{tabIds, blockIds, moveTo}` where moveTo is `before-block` or
+ * `after-block`. Steps are ordered and are computed against the result of preceding steps.
+ */
+export function planTopLevelBoundarySnaps(state, liveTabIds, treeTabIds) {
+  const treeTabs = new Set(treeTabIds);
+  const rootByTab = new Map();
+  const roots = [];
+  for (const rootId of state.roots) {
+    if (!treeTabs.has(rootId)) {
+      continue;
+    }
+    roots.push(rootId);
+    for (const tabId of subtreeIds(state, rootId)) {
+      if (treeTabs.has(tabId)) {
+        rootByTab.set(tabId, rootId);
+      }
+    }
+  }
+
+  let order = [...liveTabIds];
+  const steps = [];
+  // Every step removes at least one split for one root. The cap keeps malformed input harmless.
+  for (let pass = 0; pass < liveTabIds.length * 2; pass += 1) {
+    let split = null;
+    for (const rootId of roots) {
+      const positions = [];
+      for (let index = 0; index < order.length; index += 1) {
+        if (rootByTab.get(order[index]) === rootId) {
+          positions.push(index);
+        }
+      }
+      if (positions.length < 2) {
+        continue;
+      }
+      const first = positions[0];
+      const last = positions[positions.length - 1];
+      let blockStart = first + 1;
+      while (blockStart < last && rootByTab.get(order[blockStart]) === rootId) {
+        blockStart += 1;
+      }
+      if (blockStart >= last) {
+        continue;
+      }
+      let blockEnd = blockStart;
+      while (blockEnd <= last && rootByTab.get(order[blockEnd]) !== rootId) {
+        blockEnd += 1;
+      }
+      const before = order.slice(0, blockStart)
+        .filter((tabId) => rootByTab.get(tabId) === rootId);
+      const after = order.slice(blockEnd)
+        .filter((tabId) => rootByTab.get(tabId) === rootId);
+      if (before.length && after.length) {
+        split = { blockStart, blockEnd, before, after };
+        break;
+      }
+    }
+    if (!split) {
+      break;
+    }
+
+    const movePrefix = split.before.length < split.after.length;
+    const tabIds = movePrefix ? split.before : split.after;
+    const blockIds = order.slice(split.blockStart, split.blockEnd);
+    const moveTo = movePrefix ? 'after-block' : 'before-block';
+    steps.push({ tabIds: [...tabIds], blockIds: [...blockIds], moveTo });
+
+    const moved = new Set(tabIds);
+    order = order.filter((tabId) => !moved.has(tabId));
+    const blockPositions = blockIds.map((tabId) => order.indexOf(tabId));
+    const insertAt = moveTo === 'before-block'
+      ? Math.min(...blockPositions)
+      : Math.max(...blockPositions) + 1;
+    order.splice(insertAt, 0, ...tabIds);
+  }
+  return steps;
+}
+
 // Full display state for the native module.
 export function displayState(state, tabIds = preorder(state)) {
   const tabs = {};
