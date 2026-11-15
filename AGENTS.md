@@ -52,7 +52,7 @@ uv run python tools/ci/check_repo.py
 uv run python tools/ci/package.py --dll artifacts/native/version.dll --out dist
 
 # 端到端（需沙盒 Chrome 已运行）
-uv run --with websocket-client python tools/test/e2e.py tree|drop|tree-visual
+uv run --with websocket-client python tools/test/e2e.py tree|drop|drag-out|tree-visual
 
 # 直接驱动原生端点（不经扩展）/ 查看布局快照
 uv run --with websocket-client python tools/dev/nativecheck.py --layout
@@ -89,7 +89,7 @@ uv run --with cryptography python tools/ci/offsets_sign.py revoke <root> <文件
   - 只**新增**旧端可忽略的字段或消息：不升号。
   - 只有原生模块确定不再支持某个旧协议时，才提高 `kProtocolMin`。
   - 扩展握手时检查 `PROTOCOL ∈ [protocolMin, protocolMax]`；不在范围内就停止向 DLL 发送任何业务消息，设置页提示更新哪一边。
-- **偏移量 schema**：`resolver/spec.yaml` 的 `schema` 与 `native/src/core/offsets.h` 的 `kOffsetsSchema`，两者必须相等。规则见下一节。
+- **偏移量 schema**：当前为 **4**；`resolver/spec.yaml` 的 `schema` 与 `native/src/core/offsets.h` 的 `kOffsetsSchema` 必须相等。规则见下一节。
 - **更新提醒**（只提醒，不参与兼容判断）：DLL 的 `nativeVersion` 低于扩展版本时（`native-link.js` 的 `nativeOutdated()`），设置页显示“有可用更新”和安装命令，功能照常工作。只比较这一个方向：扩展比 DLL 旧时用户无法自己推进商店更新，提醒没有意义。代价是只改扩展的发版也会提醒用户重装 DLL；这是有意的取舍，换来不用维护“哪个版本改了 DLL”。安全模式、偏移量异常等状态的提示优先，此时只额外显示安装命令。扩展收到较旧 DLL 的握手后，会按“扩展版本 + DLL 版本”组合去重并只自动打开一次设置页；这里不用 `notifications`，以免新增带警告的权限导致自动更新后的扩展被 Chrome 停用。
 
 ## 偏移量
@@ -127,7 +127,7 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
 - **扩展连接**（`native-link.js`）：只连桥；桥未注册（`missing`）、浏览器里没有模块（`module-not-loaded`）或其它失败时退避重试（最长 30 秒）。当前传输和桥的状态会出现在设置页“关于与诊断”和调试信息里。
 - **来源限制**：`config.ini` 的 `extensions` 可限定扩展 ID，两个传输都适用；为空时放行任意扩展（桥本身已受 `allowed_origins` 限制）。
 - **握手**：扩展发 `hello {protocol, extVersion}`；DLL 回 `hello {protocolMin, protocolMax, nativeVersion, features, offsets {status, schema, chromeVersion}, safeMode {active, crashes, limit}}`。状态变化时（偏移量到位、功能启用）DLL 主动推送同样结构的 `status`。
-- **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount、外观配置），DLL 只负责照着画、不保存树；`safeMode.reset`（用户在设置页点“重新启用”）。DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragEnd`。
+- **业务消息**：扩展 → DLL：`state`（窗口标签顺序、每个标签的 depth/hidden/collapsed/hasChildren/hiddenCount/treeTab、外观配置），DLL 只负责照着画、不保存树；`safeMode.reset`（用户在设置页点“重新启用”）。DLL → 扩展：折叠点击、`dragBegin`/`dropOnto`/`dragOut`/`dragEnd`。`dragOut` 带屏幕坐标，扩展新建窗口并按前序一次迁移整棵子树。
 - **诊断**：`debug.report`（版本、构建、PID、传输、偏移量来源、安全模式、config、计数器、`native.log` 末尾 120 行；协议不兼容时也允许）、`debug.layout`（布局快照，测试用）。
 
 ## 安全模式（崩溃保护）
@@ -167,7 +167,7 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
 
 - Windows x64，VS 2022 Build Tools（MSVC，`vcvars64.bat`）、Windows SDK、cmake + Ninja、uv、node；崩溃分析要用 Windows SDK 的 Debugging Tools（cdb）。
 - **本机信息**（沙盒路径、本地 PDB 缓存、工具链的具体位置和版本）写在根目录的 `AGENTS.md.local`。它被 gitignore、不提交，`CLAUDE.md` 会一并引用；换机器时参照本节自建一份。
-- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。该版本全部 RVA/偏移见 `offsets/win64/s2/B2C7C3B72F30D3ED4C4C44205044422E1.json`。
+- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。`offsets/win64/s2/B2C7C3B72F30D3ED4C4C44205044422E1.json` 是供旧 DLL 使用的历史样例；当前 schema 4 表需用 resolver 本地生成或从 offsets 分支取得。
 
 ### Chromium 源码取用
 
@@ -228,7 +228,7 @@ git sparse-checkout set --no-cone <目录...>
 12. **调用 `gfx::Canvas::DrawStringRect` 等文字 API 时注意 ABI**：`std::u16string_view` 按指针传 `{ptr, len}` 结构，`FontList` 取 `views::Label::GetDefaultFontList()`（或其 `DeriveWithSizeDelta`）。这些签名跨版本容易变，出错时会被 SEH 静默吞掉——文字不出现时先怀疑签名，再核对 PDB。
 13. **自动化点击浏览器 UI 不可靠**：本机终端与沙盒窗口共享桌面，`PostMessage`/`SendInput` 都很难稳定命中标签栏，也起不了标签拖拽。涉及标签栏坐标、拖拽的验证只能人工做。
 14. **读 `host_view_` 的 `views::View::children_` 拿不到子 view**（读到空集合）。落点判定改用布局自己产出的快照：上一轮布局里每行可见 TabView 的矩形（容器坐标，已含缩进与隐藏处理）。
-15. **标签条内部不要调用原生拖拽 handler**：它在每次移动时都改 tab model，触发原生“其他标签让位”的实时重排，接管压不住。
+15. **树标签拖拽必须在 `InitializeDrag` 处阻止原生会话启动**：原生 handler 每次移动都会改 tab model，触发“其他标签让位”的实时重排，后置吞掉压不住。现在保留 `TabView::OnMousePressed` 的选择/激活逻辑，只让其中的 `TabDragHandler[Impl]::InitializeDrag` 对扩展明确标记的 `treeTab` no-op；`OnMouseDragged`/`OnMouseReleased` 和 capture loss 由 ArborTab 接管。固定、成组、分屏、触摸、合成事件以及没有布局快照的标签必须继续走原生路径。
 16. **快捷键：Chrome 会拒绝部分字母组合**（如 `Alt+Shift+KeyW`），可用的组合是 `Alt+Shift+Comma` / `Alt+Shift+Up` / `Alt+Shift+Down`。
 17. **沙盒重启后扩展可能还在跑旧代码**：版本号不变时，Chrome 会沿用缓存的 service worker 脚本，`Extensions.loadUnpacked` 同一路径也不会刷新。改了扩展代码后，先在 service worker 里执行 `chrome.runtime.reload()` 再测；否则测试可能对着旧代码通过。`dev.py` 已自动处理：给每次生成的扩展副本注入一次性运行标记，重载到 worker 报出本次标记才算成功，否则报错；手动在沙盒里测试时仍要注意。
 18. **spec 加了 DLL 依赖的条目却没升 schema，旧文件会被“合法地”接受**：schema 1 时期发布的 156 文件缺少后来加的字段，新 DLL 照样加载，结果 layout/twisty 静默关闭；本机缓存是新生成的，开发时完全看不出来。已因此升到 schema 2。改 spec 时按“偏移量”一节判断是否升号，并用一次真实下载（删掉本地缓存）验证。
@@ -245,7 +245,7 @@ git sparse-checkout set --no-cone <目录...>
 
 - 用 dbghelp：`SymLoadModuleExW` 直接加载 `.pdb`、`SymEnumSymbolsW`、`SymEnumTypesByNameW` + `SymGetTypeInfo`。`SymLoadModuleExW` 本身约 1 秒（延迟加载），代价落在查询上。大头是 dbghelp 第一次遍历整个符号流（冷时 100 秒以上，本机负载高时可到 4 分钟），和 Python 回调里做什么基本无关；`SymEnumSymbolsForAddrW` 每个地址也要 30 秒以上，不能拿来提速。所以 resolver 不再逐个函数查询，而是只遍历两遍：只含 public 符号的一遍（`SYMOPT_PUBLICS_ONLY`，约 10 秒）按修饰名查 `symbol:`，再遍历全部符号一遍（去修饰名），查 `private:` 并做同址检查。注意 `*` 全量遍历**不会**返回与私有函数符号同址的 public 符号，所以修饰名必须在 publics-only 那一遍里查。resolver 会逐阶段、逐条带时间戳输出，CI 上按阶段折叠；offsets 工作流把与上一版的对比（字段、大小、常量等变化）写进运行摘要页。
 - **重载函数用修饰名（mangled name）精确匹配**（关闭 `SYMOPT_UNDNAME` 后枚举 public 符号），例如 `?FillRect@Canvas@gfx@@QEAAXAEBVRect@2@I@Z`。
-- 部分函数只有私有符号、没有 public 符号（如 `TabView::GetTabInterface`、`DraggedTabsContainer::HandleTabDragInContainer`）。此时用去修饰名匹配，并要求结果唯一（`spec.yaml` 里写 `private:`）。
+- 部分函数只有私有符号、没有 public 符号（如 `TabView::GetTabInterface`）。此时用去修饰名匹配，并要求结果唯一（`spec.yaml` 里写 `private:`）。
 - prologue 从 chrome.dll 文件里读（RVA → 文件偏移用 pefile），运行时先比对前若干字节再启用功能。
 - 拿到 RVA 后要回到机器指令上核对行为，例如 `UnpinnedTabContainerViewLayout::orientation_` 非 0 时才会走 `CalculateVerticalLayout`——这类判断靠符号表看不出来。
 
@@ -272,7 +272,7 @@ git sparse-checkout set --no-cone <目录...>
   ```
 
   预先在 `Default\Preferences` 写入 `{"vertical_tabs":{"enabled":true,"collapsed_state":false,"uncollapsed_width":240}}`，启动后直接显示垂直标签。
-- **加载扩展**：通过 CDP 浏览器级 WebSocket 发送 `Extensions.loadUnpacked {path}`。Chrome 137+ 正式版已不支持 `--load-extension`。
+- **加载扩展**：通过 CDP 浏览器级 WebSocket 发送 `Extensions.loadUnpacked {path}`。Chrome 137+ 正式版已不支持 `--load-extension`；Chrome 158+ 还会在 profile 的开发者模式关闭时以 `DISABLE_UNSUPPORTED_DEVELOPER_EXTENSION` 禁用加载结果，`sandbox.py` 会在沙盒 Preferences 中打开开发者模式。
 - **沙盒扩展副本与开发桥**：`dev.py` 不直接加载 `extension/`，而是每次复制到 `<ARBORTAB_SANDBOX>\extension` 再加载，并注册独立的开发宿主 `com.arbortab.bridge.dev`（`HKCU\...\NativeMessagingHosts\com.arbortab.bridge.dev`，清单在 `<ARBORTAB_SANDBOX>\bridge\`），从不改写正式宿主 `com.arbortab.bridge`，所以本机装的 Chrome 不受影响。
   - 副本相对源码**只有两处替换**：`native-link.js` 的宿主名改为开发宿主，`service-worker.js` 多一行运行标记（`globalThis.__arbortabDevBuild`）。不要在 `prepare_extension()` 里加别的改动，否则沙盒测的和发布的就不是同一份代码。
   - 改了 `extension/` 后要重跑 `dev.ps1`（可加 `-NoBuild`）；在 `chrome://extensions` 里点“重新加载”只会重载旧副本。
@@ -292,5 +292,5 @@ git sparse-checkout set --no-cone <目录...>
 - 结构操作只有两种，都由扩展执行：改父（`attachAsLastChild`）、换兄弟位置（`insertSibling`，父节点不变）。
 - **不要**让 Chrome 自由重排后再从落点索引反推父节点——这是旧方案树错乱的来源。`tabs.onMoved` 只重算兄弟顺序（`adoptOrder`）、父关系不动，再用 `tabs.move` 把前序顺序收敛回来。
 - **收敛（`applyOrder`）**：每个窗口同时只跑一轮，期间的新请求合并成再跑一轮；每步重新读标签栏，只把“没紧跟在前序前驱后面”的树内标签挪到前驱后面，从不移动固定/成组/分屏标签。Chrome 没把标签放到要求的位置就停下（不和 Chrome 较劲）；10 秒内超过 150 次移动说明有别的东西在反向移动，暂停该窗口 30 秒。
-- **被拖的是哪个标签**由 `TabView::OnMousePressed` 记录，随 `dragBegin` / `dropOnto` 一起传递；不要用“当前激活标签”去猜。
-- 拖拽期间临时折叠被拖的展开父标签，`dragEnd` 后恢复；`dropOnto` 拒绝把父节点放进自己的后代。
+- **被拖的是哪个标签**由 `TabView::OnMousePressed` 记录，随 `dragBegin` / `dropOnto` / `dragOut` 一起传递；不要用“当前激活标签”去猜。原生侧保留 Chrome 的按下选择逻辑，但在 `InitializeDrag` 处阻止树标签进入原生拖拽会话，越过系统拖拽阈值后的移动、落点与松开全部自行处理。
+- 拖拽期间临时折叠被拖的展开父标签，`dragEnd` 后恢复；`dropOnto` 拒绝把父节点放进自己的后代。指针在标签栏外松开时，`dragOut` 用 `chrome.windows.create({tabId})` 创建窗口，再把其余后代按前序批量移入；attached/detached 事件在这段事务里不得提前同步和扁平化子树。
