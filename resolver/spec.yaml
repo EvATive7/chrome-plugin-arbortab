@@ -1,19 +1,20 @@
 # Offsets schema: must equal kOffsetsSchema (native/src/core/offsets.h). Bump both when the
 # module starts to depend on entries older files lack; see AGENTS.md ("偏移量").
-schema: 3
+schema: 4
 platform: win64
 functions:
   TabView::OnMousePressed:
     symbol: "?OnMousePressed@TabView@@EEAA_NAEBVMouseEvent@ui@@@Z"
+  TabView::OnMouseDragged:
+    symbol: "?OnMouseDragged@TabView@@EEAA_NAEBVMouseEvent@ui@@@Z"
+  TabView::OnMouseReleased:
+    symbol: "?OnMouseReleased@TabView@@EEAAXAEBVMouseEvent@ui@@@Z"
+  views::internal::RootView::OnMouseCaptureLost:
+    symbol: "?OnMouseCaptureLost@RootView@internal@views@@UEAAXXZ"
   TabView::OnPaint:
     symbol: "?OnPaint@TabView@@EEAAXPEAVCanvas@gfx@@@Z"
   TabView::PaintChildren:
     symbol: "?PaintChildren@TabView@@EEAAXAEBVPaintInfo@views@@@Z"
-  DraggedTabsContainer::HandleTabDragInContainer:
-    private: "DraggedTabsContainer::HandleTabDragInContainer"
-  DraggedTabsContainer::OnTabDragEnded:
-    hook: false
-    symbol: "?OnTabDragEnded@DraggedTabsContainer@@UEAAXXZ"
   TabView::GetTabInterface:
     hook: false
     private: "TabView::GetTabInterface"
@@ -125,11 +126,11 @@ oneOf:
   # The drag handler interface and implementation were collapsed into one concrete class in 158.
   tab drag handler:
     - functions:
-        TabDragHandler::EndDrag:
-          symbol: "?EndDrag@TabDragHandler@@QEAAXW4EndDragReason@@@Z"
+        TabDragHandler::InitializeDrag:
+          symbol: "?InitializeDrag@TabDragHandler@@QEAAXAEAVTabCollectionNode@@AEBVListSelectionModel@ui@@AEBVLocatedEvent@4@@Z"
     - functions:
-        TabDragHandlerImpl::EndDrag:
-          symbol: "?EndDrag@TabDragHandlerImpl@@UEAAXW4EndDragReason@@@Z"
+        TabDragHandlerImpl::InitializeDrag:
+          symbol: "?InitializeDrag@TabDragHandlerImpl@@UEAAXAEAVTabCollectionNode@@AEBVListSelectionModel@ui@@AEBVLocatedEvent@4@@Z"
 vtables:
   TabView: "TabView::`vftable'"
   tabs::TabModel: "tabs::TabModel::`vftable'"
@@ -139,7 +140,6 @@ vtableSlots:
     vtable: tabs::TabModel
     function: tabs::TabModel::GetContents
 fields:
-  TabView.collection_node_: [TabView, collection_node_]
   TabView.title_: [TabView, title_]
   TabView.icon_: [TabView, icon_]
   TabView.close_button_: [TabView, close_button_]
@@ -157,13 +157,6 @@ fields:
   cc::CorePaintFlags.color_: [cc::CorePaintFlags, color_]
   cc::CorePaintFlags.width_: [cc::CorePaintFlags, width_]
   cc::CorePaintFlags.bitfields_: [cc::CorePaintFlags, bitfields_]
-  DraggedTabsContainer.host_view_: [DraggedTabsContainer, host_view_]
-  DraggedTabsContainer.collection_node_: [DraggedTabsContainer, collection_node_]
-  DraggedTabsContainer.dragging_views_: [DraggedTabsContainer, dragging_views_]
-  TabCollectionNode.type_: [TabCollectionNode, type_]
-  TabCollectionNode.node_data_: [TabCollectionNode, node_data_]
-  TabCollectionNode.children_: [TabCollectionNode, children_]
-  TabCollectionNode.node_view_: [TabCollectionNode, node_view_]
   ui::Event.flags_: [ui::Event, flags_]
   ui::LocatedEvent.location_: [ui::LocatedEvent, location_]
   views::LayoutManagerBase.host_view_: [views::LayoutManagerBase, host_view_]
@@ -193,8 +186,6 @@ bitfields:
 # from the PDB). Every type used here or in `fields` is still reported under `sizes`.
 types:
   views::LayoutManagerBase: 0x270
-  DraggedTabsContainer: 0x220
-  TabCollectionNode: 0x118
   ui::Event: 0xb0
   ui::LocatedEvent: 0xc0
   views::ProposedLayout: 0x190
