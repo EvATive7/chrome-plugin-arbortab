@@ -5,6 +5,8 @@
 - VERSION is MAJOR.MINOR.PATCH and equals extension/manifest.json's version (and the tag).
 - Every locale has exactly the keys of the default locale, and every data-i18n key used by the
   extension pages exists.
+- The standalone Windows installer and uninstaller cover the same locales, message keys, and
+  formatting placeholders.
 - The offsets in offsets/ match resolver/spec.yaml's schema and their own file names.
 - The bridge's host manifest allows the extension ID that manifest.json's "key" produces, and
   the extension code and dev tools use that same ID and host name.
@@ -65,6 +67,53 @@ def check_locales() -> None:
         fail(f"keys used by the extension but not defined: {sorted(missing)}")
 
 
+def check_installer_locales() -> None:
+    locale_names = {folder.name for folder in (REPO / "extension" / "_locales").iterdir() if folder.is_dir()}
+    for name in ("install.ps1", "uninstall.ps1"):
+        path = REPO / "packaging" / "windows" / name
+        text = path.read_text(encoding="utf-8-sig")
+        match = re.search(r"\$MessageCatalog = @'\r?\n(.*?)\r?\n'@ \| ConvertFrom-Json", text, re.S)
+        if not match:
+            fail(f"{path.relative_to(REPO)} has no embedded MessageCatalog")
+            continue
+        try:
+            catalog = json.loads(match.group(1))
+        except json.JSONDecodeError as error:
+            fail(f"{path.relative_to(REPO)} MessageCatalog is invalid JSON: {error}")
+            continue
+        languages = set(catalog)
+        if languages != locale_names:
+            fail(
+                f"{path.relative_to(REPO)} languages {sorted(languages)} "
+                f"do not match extension locales {sorted(locale_names)}"
+            )
+        if "en" not in catalog:
+            fail(f"{path.relative_to(REPO)} MessageCatalog has no English fallback")
+            continue
+        reference = set(catalog["en"])
+        used = set(re.findall(r"\bMsg '([A-Za-z0-9]+)'", text))
+        if missing := used - reference:
+            fail(f"{path.relative_to(REPO)} uses undefined messages: {sorted(missing)}")
+        for language, messages in catalog.items():
+            keys = set(messages)
+            if missing := reference - keys:
+                fail(f"{path.relative_to(REPO)} language {language} lacks {sorted(missing)}")
+            if extra := keys - reference:
+                fail(f"{path.relative_to(REPO)} language {language} has extra keys {sorted(extra)}")
+            for key in reference & keys:
+                value = messages[key]
+                if not isinstance(value, str) or not value:
+                    fail(f"{path.relative_to(REPO)} language {language} message {key} is empty")
+                    continue
+                expected = set(re.findall(r"\{\d+\}", catalog["en"][key]))
+                actual = set(re.findall(r"\{\d+\}", value))
+                if actual != expected:
+                    fail(
+                        f"{path.relative_to(REPO)} language {language} message {key} "
+                        f"has placeholders {sorted(actual)}, expected {sorted(expected)}"
+                    )
+
+
 def check_offsets() -> None:
     spec = (REPO / "resolver" / "spec.yaml").read_text(encoding="utf-8")
     schema = int(re.search(r"^schema:\s*(\d+)", spec, re.M).group(1))
@@ -123,6 +172,7 @@ def main() -> int:
     args = parser.parse_args()
     check_version(args.tag)
     check_locales()
+    check_installer_locales()
     check_offsets()
     check_bridge()
     for message in errors:

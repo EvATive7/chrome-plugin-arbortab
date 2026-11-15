@@ -59,13 +59,13 @@ Everything is on the [latest release](https://github.com/EvATive7/chrome-plugin-
 
 1. Turn on Chrome's vertical tab strip.
 2. Install the **ArborTab extension**: unzip `arbortab-extension-<version>.zip` to a folder you keep, open `chrome://extensions`, turn on **Developer mode** and choose **Load unpacked** with that folder. The extension's settings page shows the next step.
-3. Install the **native module**: press <kbd>Win</kbd>+<kbd>R</kbd> (or open a terminal), paste this command and press Enter. Quit Chrome when the installer asks.
+3. Install the **native module**: press <kbd>Win</kbd>+<kbd>R</kbd> (or open a terminal), paste this command and press Enter. Save your work in Chrome; when the installer shows its red warning, press Enter and it will close Chrome automatically.
 
    ```
    powershell -NoExit -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/EvATive7/chrome-plugin-arbortab/releases/latest/download/install.ps1 | iex"
    ```
 
-   The script comes from this repository's latest release. It downloads the matching native package, finds your Chrome, installs the small connector (`arbortab-bridge.exe`) for your user account, asks for administrator rights only if Chrome is installed for all users, and copies `version.dll` next to `chrome.exe`. Please read the security trade-off below first.
+   The script comes from this repository's latest release. It downloads the matching native package, finds your Chrome, installs the small connector (`arbortab-bridge.exe`) for your user account, asks for administrator rights only if Chrome is installed for all users, and copies `version.dll` next to `chrome.exe`. The installer and uninstaller use the matching ArborTab language for the Windows display language, with English as the fallback. Please read the security trade-off below first.
 4. Start Chrome. On the extension's settings page, **Native module** should show **Connected**.
 
 Prefer not to pipe a script into PowerShell? Download `arbortab-native-*-win64.zip` from the release, check it, and double-click `install.cmd` inside.
