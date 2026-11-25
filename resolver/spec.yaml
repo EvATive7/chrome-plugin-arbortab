@@ -1,6 +1,6 @@
 # Offsets schema: must equal kOffsetsSchema (native/src/core/offsets.h). Bump both when the
 # module starts to depend on entries older files lack; see AGENTS.md ("偏移量").
-schema: 4
+schema: 5
 platform: win64
 functions:
   TabView::OnMousePressed:
@@ -110,9 +110,15 @@ functions:
 # what its build has.
 oneOf:
   # The layout of the unpinned tabs. Up to 157 one class serves both orientations and picks the
-  # vertical branch by orientation_; 158 split it into ...VerticalLayout / ...HorizontalLayout.
-  # version.dll hooks whichever function the table names (see features/layout.cpp).
+  # vertical branch by orientation_; 158 split it into ...VerticalLayout / ...HorizontalLayout;
+  # 159 (tab group focus mode) moved CalculateProposedLayout(const SizeBounds&) into the shared
+  # base UnpinnedTabContainerView::LayoutManager, which calls the vertical class with the focused
+  # group (std::optional<TabGroupId>, passed by reference in r9). version.dll hooks whichever
+  # function the table names (see features/layout.cpp and kLayout* in core/chrome_api.h).
   unpinned tab layout:
+    - functions:
+        UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout(focused_group):
+          symbol: "?CalculateProposedLayout@UnpinnedTabContainerViewVerticalLayout@@MEBA?AUProposedLayout@views@@AEBVSizeBounds@3@V?$optional@VTabGroupId@tab_groups@@@__Cr@std@@@Z"
     - functions:
         UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout:
           symbol: "?CalculateProposedLayout@UnpinnedTabContainerViewVerticalLayout@@MEBA?AUProposedLayout@views@@AEBVSizeBounds@3@@Z"

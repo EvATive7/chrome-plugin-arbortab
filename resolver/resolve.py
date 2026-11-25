@@ -473,7 +473,10 @@ def main() -> int:
                 collisions[output_name] = "requested more than once"
                 progress.log(f"  {output_name:<58} SHARED: requested more than once")
                 continue
-            others = [name for name in others if name != output_name]
+            # Undecorated private names carry no parameter list, so a key that tells an overload
+            # apart with a "(...)" suffix is compared without it.
+            own_name = output_name.split("(", 1)[0]
+            others = [name for name in others if name != own_name]
             if others:
                 collisions[output_name] = ", ".join(others[:4])
                 progress.log(f"  {output_name:<58} SHARED with {collisions[output_name]}")

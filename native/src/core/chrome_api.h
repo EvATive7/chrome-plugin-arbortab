@@ -11,6 +11,20 @@
 
 namespace arbortab {
 
+// Names the offsets table may use for the unpinned-tab layout hook; a table names exactly one.
+// All of them return the ProposedLayout through the hidden buffer in rdx, so one hook serves
+// every shape (see features/layout.cpp).
+//  - 159+: the vertical class lays out for a given focused tab group (focus mode); the extra
+//    std::optional<tab_groups::TabGroupId> arrives by reference in r9.
+inline constexpr const char* kLayoutFocusedVertical =
+    "UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout(focused_group)";
+//  - 158: the vertical class has its own CalculateProposedLayout(const SizeBounds&).
+inline constexpr const char* kLayoutVertical =
+    "UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout";
+//  - <= 157: one class serves both orientations and is switched by orientation_.
+inline constexpr const char* kLayoutShared =
+    "UnpinnedTabContainerViewLayout::CalculateProposedLayout";
+
 // session id helper: SessionTabHelper::IdForTab(SessionID* out, const WebContents*)
 struct ChromeApi {
   bool ready = false;

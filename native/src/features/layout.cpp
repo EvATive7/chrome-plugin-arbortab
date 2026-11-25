@@ -227,8 +227,11 @@ StripSnapshot& SnapshotSlotFor(void* host_view) {
   return *oldest;
 }
 
-// MSVC x64: rcx = this, rdx = hidden return buffer, r8 = &size_bounds.
-using CalcLayoutFn = void* (*)(const void* self, void* out_layout, const void* size_bounds);
+// MSVC x64: rcx = this, rdx = hidden return buffer, r8 = &size_bounds, and from 159 on
+// r9 = &std::optional<TabGroupId> (focused group). The older one-argument targets ignore r9, so
+// the hook always forwards it unchanged.
+using CalcLayoutFn = void* (*)(const void* self, void* out_layout, const void* size_bounds,
+                               const void* focused_group);
 
 // absl::InlinedVector<ChildLayout, 8>: metadata at +0x08 holds (size << 1) | is_allocated,
 // the payload is either inline at +0x10 or a {data, capacity} pair at +0x10.
@@ -628,8 +631,10 @@ void NoteLayoutCall() {
   PublishStorm();
 }
 
-void* HookCalculateLayout(const void* self, void* out_layout, const void* size_bounds) {
-  void* result = reinterpret_cast<CalcLayoutFn>(g_feature.original)(self, out_layout, size_bounds);
+void* HookCalculateLayout(const void* self, void* out_layout, const void* size_bounds,
+                          const void* focused_group) {
+  void* result = reinterpret_cast<CalcLayoutFn>(g_feature.original)(self, out_layout, size_bounds,
+                                                                    focused_group);
   // A C++ exception escaping into Chrome's layout code terminates the browser, so the whole
   // post-processing step is guarded.
   try {
@@ -670,19 +675,22 @@ bool PrologueMatches(uint8_t* base, const FunctionEntry& entry) {
 }  // namespace
 
 bool InstallLayoutFeature(HMODULE chrome_dll, const Offsets& offsets, LayoutFeature& layout) {
-  constexpr const char* kVerticalName =
-      "UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout";
-  constexpr const char* kSharedName =
-      "UnpinnedTabContainerViewLayout::CalculateProposedLayout";
-  const auto vertical = offsets.hooks.find(kVerticalName);
-  const auto shared = offsets.hooks.find(kSharedName);
-  if ((vertical != offsets.hooks.end()) == (shared != offsets.hooks.end())) {
-    ARB_WARN("offsets table must contain exactly one layout hook target");
+  const char* target_name = nullptr;
+  const FunctionEntry* target_entry = nullptr;
+  int targets = 0;
+  for (const char* name : {kLayoutFocusedVertical, kLayoutVertical, kLayoutShared}) {
+    const auto found = offsets.hooks.find(name);
+    if (found != offsets.hooks.end()) {
+      ++targets;
+      target_name = name;
+      target_entry = &found->second;
+    }
+  }
+  if (targets != 1) {
+    ARB_WARN("offsets table must contain exactly one layout hook target (has %d)", targets);
     return false;
   }
-  const char* target_name = vertical != offsets.hooks.end() ? kVerticalName : kSharedName;
-  const FunctionEntry& target =
-      vertical != offsets.hooks.end() ? vertical->second : shared->second;
+  const FunctionEntry& target = *target_entry;
   const auto field = [&offsets](const char* name, uint32_t& out) {
     const auto entry = offsets.fields.find(name);
     if (entry == offsets.fields.end()) {

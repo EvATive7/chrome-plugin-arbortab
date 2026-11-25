@@ -89,7 +89,7 @@ uv run --with cryptography python tools/ci/offsets_sign.py revoke <root> <文件
   - 只**新增**旧端可忽略的字段或消息：不升号。
   - 只有原生模块确定不再支持某个旧协议时，才提高 `kProtocolMin`。
   - 扩展握手时检查 `PROTOCOL ∈ [protocolMin, protocolMax]`；不在范围内就停止向 DLL 发送任何业务消息，设置页提示更新哪一边。
-- **偏移量 schema**：当前为 **4**；`resolver/spec.yaml` 的 `schema` 与 `native/src/core/offsets.h` 的 `kOffsetsSchema` 必须相等。规则见下一节。
+- **偏移量 schema**：当前为 **5**；`resolver/spec.yaml` 的 `schema` 与 `native/src/core/offsets.h` 的 `kOffsetsSchema` 必须相等。规则见下一节。
 - **更新提醒**（只提醒，不参与兼容判断）：DLL 的 `nativeVersion` 低于扩展版本时（`native-link.js` 的 `nativeOutdated()`），设置页显示“有可用更新”和安装命令，功能照常工作。只比较这一个方向：扩展比 DLL 旧时用户无法自己推进商店更新，提醒没有意义。代价是只改扩展的发版也会提醒用户重装 DLL；这是有意的取舍，换来不用维护“哪个版本改了 DLL”。安全模式、偏移量异常等状态的提示优先，此时只额外显示安装命令。扩展收到较旧 DLL 的握手后，会按“扩展版本 + DLL 版本”组合去重并只自动打开一次设置页；这里不用 `notifications`，以免新增带警告的权限导致自动更新后的扩展被 Chrome 停用。
 
 ## 偏移量
@@ -167,7 +167,7 @@ DLL 在 `chrome.dll` 映射后**立即**启动两个传输，不等偏移量，�
 
 - Windows x64，VS 2022 Build Tools（MSVC，`vcvars64.bat`）、Windows SDK、cmake + Ninja、uv、node；崩溃分析要用 Windows SDK 的 Debugging Tools（cdb）。
 - **本机信息**（沙盒路径、本地 PDB 缓存、工具链的具体位置和版本）写在根目录的 `AGENTS.md.local`。它被 gitignore、不提交，`CLAUDE.md` 会一并引用；换机器时参照本节自建一份。
-- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。`offsets/win64/s2/B2C7C3B72F30D3ED4C4C44205044422E1.json` 是供旧 DLL 使用的历史样例；当前 schema 4 表需用 resolver 本地生成或从 offsets 分支取得。
+- 当前对照版本：Chrome 稳定版 156.0.8078.80，PDB key `B2C7C3B72F30D3ED4C4C44205044422E1`。`offsets/win64/s2/B2C7C3B72F30D3ED4C4C44205044422E1.json` 是供旧 DLL 使用的历史样例；当前 schema 5 表需用 resolver 本地生成或从 offsets 分支取得。
 
 ### Chromium 源码取用
 
@@ -242,6 +242,7 @@ git sparse-checkout set --no-cone <目录...>
 26. **PDB key 不要用 pefile 的 `Signature_String` 拼**：新版 pefile 的 `Signature_String` 已经带了 Age，再拼一次就成了 34 位的 key（157 的 `...2E1` 变成 `...2E11`）。符号服务器对它返回 404，看起来和“PDB 还没上线”一模一样，CI 因此空等了好几天。现在 `pdbinfo.py` 与 `resolve.py` 都直接解析 RSDS 原始记录，与 DLL 的 `PdbKeyFromModule` 一致；offsets 工作流在安装包发布 48 小时后仍拿不到 PDB 时会开 issue。遇到 404，先拿 `native.log` 里 `downloading offsets for key` 的 key 核对。
 27. **`GetCursorPos` 是物理像素，`chrome.windows.create` 的 bounds 是 DIP**：高 DPI 下直接传屏幕坐标会让 Chrome 报 `Bounds must be at least 50% within visible screen space`，拖出消息看似发送成功却没有窗口。原生端要用捕获窗口的 `GetDpiForWindow` 把坐标转换成窗口相对 DIP；扩展结合源窗口 DIP bounds 后再夹取，并在带 bounds 的 `windows.create` 失败时去掉 `left/top` 重试。
 28. **校验过期 host view 时，连读 vtable 本身也必须在 SEH 里**：多窗口关闭或迁移标签后，记录的 strip host 可能已经释放；在 `RefreshViewsOnUiThread` 里先裸读 `*view` 再进入带 `__try` 的刷新函数仍会让浏览器崩溃。把单次指针读取拆进不需要 C++ 展开的 SEH helper，读取失败就跳过该 host。
+29. **159 的标签组“聚焦模式”改了布局函数签名**：`CalculateProposedLayout(const SizeBounds&)` 挪到横竖共用的基类 `UnpinnedTabContainerView::LayoutManager`（`final`），由它带上聚焦的组再调用竖向类的 `CalculateProposedLayout(const SizeBounds&, std::optional<TabGroupId>)`（过渡动画时调两次再混合）。现在接管的是竖向类的两参版本：optional 超过 8 字节，按值传递实际是 r9 里的临时副本指针，钩子统一按 4 个参数原样转发（旧版一参目标不读 r9，转发无害）。spec 的 key 用 `(focused_group)` 后缀区分重载；resolver 做同址检查时会去掉 `(…)` 再与去修饰名比较。
 
 ## 符号与偏移核对经验
 

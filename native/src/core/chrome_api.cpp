@@ -151,21 +151,24 @@ bool ResolveChromeApi(HMODULE chrome_dll, const Offsets& offsets, ChromeApi& api
   resolved.off_tab_collapsed = field("TabView.collapsed_");
   resolved.off_tab_icon = field("TabView.icon_");
 
-  constexpr const char* kVerticalLayout =
-      "UnpinnedTabContainerViewVerticalLayout::CalculateProposedLayout";
-  constexpr const char* kSharedLayout =
-      "UnpinnedTabContainerViewLayout::CalculateProposedLayout";
-  const bool has_vertical_layout = offsets.hooks.find(kVerticalLayout) != offsets.hooks.end();
-  const bool has_shared_layout = offsets.hooks.find(kSharedLayout) != offsets.hooks.end();
+  const auto has_hook = [&offsets](const char* name) {
+    return offsets.hooks.find(name) != offsets.hooks.end();
+  };
+  const bool has_vertical_layout =
+      has_hook(kLayoutFocusedVertical) || has_hook(kLayoutVertical);
+  const bool has_shared_layout = has_hook(kLayoutShared);
+  const int layout_targets = static_cast<int>(has_hook(kLayoutFocusedVertical)) +
+                             static_cast<int>(has_hook(kLayoutVertical)) +
+                             static_cast<int>(has_shared_layout);
   resolved.layout_is_vertical_only = has_vertical_layout;
 
-  const auto missing = [&resolved, has_vertical_layout, has_shared_layout]() {
+  const auto missing = [&resolved, has_shared_layout, layout_targets]() {
     std::string text;
     if (!resolved.get_tab_interface) text += "GetTabInterface ";
     if (!resolved.id_for_tab) text += "IdForTab ";
     if (resolved.get_contents_slot < 0) text += "GetContentsSlot ";
     if (resolved.tab_view_vtables.empty()) text += "TabViewVtables ";
-    if (has_vertical_layout == has_shared_layout) text += "LayoutHookTarget ";
+    if (layout_targets != 1) text += "LayoutHookTarget ";
     if (has_shared_layout && !resolved.off_tab_orientation) text += "orientation_ ";
     if (!resolved.off_tab_collapsed) text += "TabView.collapsed_ ";
     return text;
